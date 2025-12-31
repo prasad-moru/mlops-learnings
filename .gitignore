@@ -1,0 +1,6 @@
+*.pyc
+__pycache__/
+mlruns/
+.env
+*.pkl
+data/*.csv
