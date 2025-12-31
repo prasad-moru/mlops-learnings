@@ -51,17 +51,3 @@ if __name__ == "__main__":
     class_names = ['setosa', 'versicolor', 'virginica']
     print(f"Input: {sample_data.values[0]}")
     print(f"Prediction: Class {prediction[0]} ({class_names[prediction[0]]})")
-        
-        # mlflow.log_params(params)
-        
-        # # Train model
-        # from train import load_data, train_model
-        # X_train, X_test, y_train, y_test = load_data()
-        # model = train_model(X_train, y_train, 
-        #                     params['n_estimators'], 
-        #                     params['max_depth'])
-        
-        # # Log model
-        # mlflow.sklearn.log_model(model, "model")
-        
-        # print("Model trained and logged successfully.")
