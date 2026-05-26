@@ -1,6 +1,15 @@
 *.pyc
 __pycache__/
 mlruns/
+mlartifacts/
 .env
 *.pkl
 data/*.csv
+artifacts/*.png
+artifacts/*.txt
+.pytest_cache/
+htmlcov/
+*.egg-info/
+dist/
+build/
+.DS_Store
