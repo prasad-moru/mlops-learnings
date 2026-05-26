@@ -6,14 +6,12 @@ version: '3.8'
 # All services talk to each other on the internal network.
 
 services:
-
-  # ── PostgreSQL — stores all MLflow metadata ──────────────────────────────────
   db:
     image: postgres:14
     environment:
-      POSTGRES_USER:     mlflow_user
-      POSTGRES_PASSWORD: your_password
-      POSTGRES_DB:       mlflow_db
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data   # data persists across restarts
     ports:
@@ -33,7 +31,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      MLFLOW_TRACKING_URI: postgresql://mlflow_user:your_password@db/mlflow_db
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}
     restart: on-failure
 
 volumes:

@@ -1,5 +1,7 @@
-*.pyc
+
 __pycache__/
+*.pyc
+venv/
 mlruns/
 mlartifacts/
 .env
@@ -13,30 +15,6 @@ htmlcov/
 dist/
 build/
 .DS_Store
-<<<<<<< HEAD
-
-
-
-# Python virtual environment
-venv/
-
-# Python cache
-__pycache__/
-*.pyc
-
-# MLflow
-mlruns/
-
-# Environment files
-.env
-
-# Jupyter
-.ipynb_checkpoints/
-
-# VS Code
-.vscode/
-
-# Logs
 *.log
-=======
->>>>>>> 639cd93ce79453c9bd2d7d7f898bec456d9436c5
+.vscode/
+.ipynb_checkpoints/
