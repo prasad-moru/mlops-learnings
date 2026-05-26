@@ -7,6 +7,8 @@ from sklearn.datasets import load_iris
 import pandas as pd
 import os
 from dotenv import load_dotenv
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 # Load environment variables
 load_dotenv()

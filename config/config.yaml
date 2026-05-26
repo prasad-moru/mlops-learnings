@@ -1,0 +1,17 @@
+# config/config.yaml
+model:
+  type: RandomForest
+  n_estimators: 100
+  max_depth: 5
+  random_state: 42
+
+data:
+  test_size: 0.2
+  random_state: 42
+
+mlflow:
+  experiment_name: iris_classification
+  run_name: rf_baseline
+
+monitoring:
+  drift_threshold: 0.05

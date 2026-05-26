@@ -1,0 +1,32 @@
+# .github/workflows/mlops-pipeline.yml
+name: MLOps Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  test-and-train:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+      
+      - name: Run tests
+        run: pytest tests/ --cov=src
+      
+      - name: Train model
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: python src/train.py
+      
+      - name: Register model
+        if: github.ref == 'refs/heads/main'
+        run: python src/model_registry.py
