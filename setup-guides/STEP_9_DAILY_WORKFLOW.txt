@@ -1,0 +1,191 @@
+
+====================================================================
+  STEP 9 — DAILY WORKFLOW & COMPLETE CHEAT SHEET
+====================================================================
+
+====================================================================
+PART A — MORNING STARTUP ROUTINE (run in WSL terminal)
+====================================================================
+
+  # 1. Start all services
+  sudo service postgresql start
+  start-mlflow
+  start-api
+
+  # 2. Verify everything is up
+  curl -s http://localhost:5000/health | python3 -m json.tool
+  curl -s http://localhost:8000/health | python3 -m json.tool
+
+  # 3. Enter project
+  mlops   # (alias created in Step 2)
+
+  # 4. Open browser tabs:
+  #    http://localhost:5000   MLflow UI
+  #    http://localhost:8000/docs  API docs
+
+====================================================================
+PART B — COMPLETE COMMAND REFERENCE
+====================================================================
+
+  ── SERVICES ─────────────────────────────────────────────────────
+  sudo service postgresql start    Start PostgreSQL
+  sudo service postgresql stop     Stop PostgreSQL
+  sudo service postgresql status   Check PostgreSQL status
+  start-mlflow                     Start MLflow server (alias)
+  stop-mlflow                      Stop MLflow server (alias)
+  mlflow-logs                      Watch MLflow logs live (alias)
+  start-api                        Start FastAPI server (alias)
+  stop-api                         Stop FastAPI server (alias)
+  api-logs                         Watch API logs live (alias)
+
+  ── PYTHON ENVIRONMENT ────────────────────────────────────────────
+  source venv/bin/activate         Activate virtual environment
+  deactivate                       Deactivate virtual environment
+  pip list                         Show installed packages
+  pip install <package>            Install a package
+  pip freeze > requirements.txt    Update requirements file
+  mlops                            Go to project + activate venv
+
+  ── TRAINING & EXPERIMENTS ────────────────────────────────────────
+  python src/train.py                     Run baseline training
+  python src/experiment.py               Run 5 config comparison
+  python src/hyperparameter_tuning.py    Run 50-trial Optuna search
+  python src/model_registry.py           Register best model
+  python src/predict.py                  Test predictions
+  python src/monitoring.py --drift 0.0   Run monitoring (no drift)
+  python src/monitoring.py --drift 1.5   Run monitoring (with drift)
+
+  ── TESTING ───────────────────────────────────────────────────────
+  pytest tests/ -v                        Run all tests
+  pytest tests/test_train.py -v          Test training only
+  pytest tests/test_api.py -v            Test API only
+  pytest tests/test_monitoring.py -v     Test monitoring only
+  pytest tests/ --cov=src                Tests with coverage
+
+  ── API TESTING ───────────────────────────────────────────────────
+  curl http://localhost:8000/health
+  curl http://localhost:8000/model-info
+  curl -X POST http://localhost:8000/predict \
+    -H "Content-Type: application/json" \
+    -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
+
+  ── MLFLOW CLI ────────────────────────────────────────────────────
+  mlflow experiments list                 List all experiments
+  mlflow runs list --experiment-id 1      List runs in experiment
+  mlflow models list                      List registered models
+  mlflow db upgrade postgresql://...      Upgrade database schema
+
+  ── POSTGRESQL ────────────────────────────────────────────────────
+  sudo -u postgres psql                   PostgreSQL shell (admin)
+  psql -U mlflow_user -d mlflow_db -h localhost  Connect as mlflow_user
+  \l                                      List databases (in psql)
+  \dt                                     List tables (in psql)
+  \q                                      Quit psql
+
+  ── DOCKER (if using Docker setup) ────────────────────────────────
+  docker compose up -d                   Start stack
+  docker compose down                    Stop stack
+  docker compose ps                      Check status
+  docker compose logs -f                 Watch all logs
+  docker compose logs mlflow -f          Watch MLflow logs
+
+  ── GIT ───────────────────────────────────────────────────────────
+  git status                             Check changed files
+  git add .                              Stage all changes
+  git commit -m "message"               Commit with message
+  git push                               Push to GitHub
+  git log --oneline -10                  Recent 10 commits
+
+====================================================================
+PART C — TROUBLESHOOTING QUICK FIXES
+====================================================================
+
+  Problem                          Solution
+  ──────────────────────────────────────────────────────────────────
+  MLflow UI not opening            sudo service postgresql start
+                                   start-mlflow
+                                   
+  "psycopg2 connection refused"    sudo service postgresql start
+  
+  Port 5000 in use                 sudo lsof -i :5000 | kill -9 <PID>
+  
+  Port 8000 in use                 sudo lsof -i :8000 | kill -9 <PID>
+  
+  "Model not found in registry"    python src/model_registry.py
+  
+  "No module named src.train"      cd ~/projects/mlops-project
+                                   source venv/bin/activate
+                                   
+  Import errors                    pip install -r requirements.txt
+  
+  WSL out of memory                Restart WSL: wsl --shutdown (Windows)
+  
+  Slow training                    Check CPU: htop
+                                   Reduce n_trials in tuning.py
+
+====================================================================
+PART D — PROJECT FILE PURPOSE REMINDER
+====================================================================
+
+  File                        Purpose                      Run it?
+  ─────────────────────────────────────────────────────────────────
+  src/train.py                Main training pipeline       ✅ Yes
+  src/experiment.py           Compare configs              ✅ Yes
+  src/hyperparameter_tuning.py Find best params           ✅ Yes
+  src/model_registry.py       Register/promote model      ✅ Yes
+  src/predict.py              Test predictions             ✅ Yes
+  src/api.py                  FastAPI server               ✅ (via uvicorn)
+  src/monitoring.py           Drift detection              ✅ Yes
+  src/config.py               Config loader                ❌ (imported)
+  src/data_versioning.py      Dataset logger               ❌ (imported)
+  tests/test_train.py         Training unit tests          ✅ (via pytest)
+  tests/test_api.py           API unit tests               ✅ (via pytest)
+  tests/test_monitoring.py    Monitoring unit tests        ✅ (via pytest)
+  config/config.yaml          Configuration values         ❌ (read by config.py)
+  .env                        Secrets and URIs             ❌ (read automatically)
+  docker-compose.yml          Docker stack definition      ✅ (via docker compose)
+  Dockerfile                  Container build definition   ✅ (via docker build)
+  .github/workflows/*.yml     CI/CD pipeline               ✅ (auto on git push)
+
+====================================================================
+PART E — ENVIRONMENT SETUP (full one-liner cheatsheet)
+====================================================================
+
+  # First time setup (run once)
+  sudo service postgresql start && \
+  sudo -u postgres psql -c "CREATE DATABASE mlflow_db;" && \
+  sudo -u postgres psql -c "CREATE USER mlflow_user WITH PASSWORD 'mlflow_password_2024';" && \
+  sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE mlflow_db TO mlflow_user;" && \
+  python3.9 -m venv venv && \
+  source venv/bin/activate && \
+  pip install -r requirements.txt && \
+  cp .env.example .env && \
+  echo "✅ Setup complete!"
+
+  # Daily startup (run every session)
+  sudo service postgresql start && \
+  source venv/bin/activate && \
+  nohup mlflow server \
+    --backend-store-uri postgresql://mlflow_user:mlflow_password_2024@localhost/mlflow_db \
+    --default-artifact-root ~/mlflow-artifacts \
+    --host 0.0.0.0 --port 5000 > ~/mlflow-server.log 2>&1 & \
+  echo "✅ All services started"
+
+====================================================================
+QUICK START SUMMARY
+====================================================================
+
+  1. sudo service postgresql start
+  2. start-mlflow
+  3. mlops
+  4. python src/train.py         ← see results in http://localhost:5000
+  5. python src/experiment.py    ← compare 5 configs
+  6. python src/hyperparameter_tuning.py  ← find best params
+  7. python src/model_registry.py         ← register to production
+  8. start-api
+  9. curl http://localhost:8000/predict ...  ← test API
+
+  Everything is logged to MLflow at http://localhost:5000
+  ALL done! You have a complete MLOps system running locally.
+
+====================================================================

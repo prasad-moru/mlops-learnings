@@ -1,0 +1,41 @@
+# ── Core ML ──────────────────────────────────────────────
+mlflow==3.12.0
+scikit-learn==1.3.2
+pandas==2.1.4
+numpy==1.26.2
+
+# ── Database backend ─────────────────────────────────────
+psycopg2-binary==2.9.9
+
+# ── Cloud / artifact storage ─────────────────────────────
+boto3>=1.43.15
+
+# ── Configuration & environment ──────────────────────────
+python-dotenv==1.0.0
+pyyaml==6.0.1
+
+# ── Hyperparameter tuning ─────────────────────────────────
+optuna==3.5.0
+
+# ── API serving ───────────────────────────────────────────
+fastapi==0.109.0
+uvicorn==0.27.0
+pydantic==2.5.3
+
+# ── Visualisation ─────────────────────────────────────────
+matplotlib==3.8.2
+seaborn==0.13.0
+
+# ── Drift detection ───────────────────────────────────────
+scipy==1.11.4
+
+# ── Testing ───────────────────────────────────────────────
+pytest==7.4.3
+pytest-cov==4.1.0
+requests==2.31.0
+httpx==0.26.0
+
+# ── Build tooling (keep packaging happy) ──────────────────
+packaging>=24.0
+setuptools>=68.0
+wheel>=0.47.0

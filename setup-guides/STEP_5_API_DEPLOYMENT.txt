@@ -1,0 +1,239 @@
+
+====================================================================
+  STEP 5 — FASTAPI DEPLOYMENT & TESTING
+====================================================================
+
+====================================================================
+PART A — START THE API SERVER
+====================================================================
+
+WHY FastAPI?
+  Your ML model only lives in Python.
+  A mobile app, web app, or other service can't import Python.
+  FastAPI creates an HTTP endpoint that ANY language can call.
+  
+  Request flow:
+    Mobile App → HTTP POST → FastAPI → model.predict() → JSON response
+
+  # Prerequisites (must be running):
+  #   □ PostgreSQL running
+  #   □ MLflow server running at localhost:5000
+  #   □ Model registered in Production stage (done in Step 4)
+
+  cd ~/projects/mlops-project
+  source venv/bin/activate
+
+  # Start the API server
+  uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
+
+  # Flags explained:
+  # src.api:app  → file src/api.py, variable 'app'
+  # --host 0.0.0.0 → listen on all interfaces
+  # --port 8000    → port number
+  # --reload       → auto-restart when code changes (dev mode)
+
+  # Expected output:
+  # INFO:     Loading model...
+  # INFO:     ✅  Model loaded: iris_classifier/Production
+  # INFO:     Uvicorn running on http://0.0.0.0:8000
+
+  # Open in Windows browser:
+  #   http://localhost:8000/docs   ← Interactive Swagger UI
+  #   http://localhost:8000/health ← Health check
+  #   http://localhost:8000        ← API root
+
+====================================================================
+PART B — TEST THE API (MULTIPLE METHODS)
+====================================================================
+
+  Open a NEW WSL terminal (keep API running in first terminal):
+
+  ── Method 1: curl command ───────────────────────────────────────
+
+  # Health check
+  curl http://localhost:8000/health
+
+  # Expected:
+  # {"status":"healthy","model_loaded":true,"timestamp":"2024-..."}
+
+  # Make a prediction (setosa flower)
+  curl -X POST "http://localhost:8000/predict" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "sepal_length": 5.1,
+      "sepal_width": 3.5,
+      "petal_length": 1.4,
+      "petal_width": 0.2
+    }'
+
+  # Expected response:
+  # {
+  #   "prediction": 0,
+  #   "class_name": "setosa",
+  #   "confidence": 0.98,
+  #   "model_name": "iris_classifier",
+  #   "timestamp": "2024-..."
+  # }
+
+  # Test versicolor
+  curl -X POST "http://localhost:8000/predict" \
+    -H "Content-Type: application/json" \
+    -d '{"sepal_length":6.0,"sepal_width":2.7,"petal_length":5.1,"petal_width":1.6}'
+
+  # Test virginica
+  curl -X POST "http://localhost:8000/predict" \
+    -H "Content-Type: application/json" \
+    -d '{"sepal_length":6.9,"sepal_width":3.1,"petal_length":5.4,"petal_width":2.1}'
+
+  ── Method 2: Python requests ────────────────────────────────────
+
+  python3 -c "
+  import requests
+  
+  url = 'http://localhost:8000/predict'
+  
+  test_cases = [
+      {'name': 'setosa',     'sepal_length': 5.1, 'sepal_width': 3.5, 'petal_length': 1.4, 'petal_width': 0.2},
+      {'name': 'versicolor', 'sepal_length': 6.0, 'sepal_width': 2.7, 'petal_length': 5.1, 'petal_width': 1.6},
+      {'name': 'virginica',  'sepal_length': 6.9, 'sepal_width': 3.1, 'petal_length': 5.4, 'petal_width': 2.1},
+  ]
+  
+  print('Testing API predictions...')
+  for case in test_cases:
+      payload = {k: v for k, v in case.items() if k != 'name'}
+      response = requests.post(url, json=payload)
+      result = response.json()
+      correct = '✅' if result['class_name'] == case['name'] else '❌'
+      print(f'  {correct} Expected: {case[\"name\"]:12} Got: {result[\"class_name\"]:12} Confidence: {result[\"confidence\"]:.1%}')
+  "
+
+  ── Method 3: Swagger UI (browser) ───────────────────────────────
+
+  # Open: http://localhost:8000/docs
+  # 
+  # Click POST /predict → "Try it out" → fill in values → Execute
+  # 
+  # This is the easiest way to demo the API to non-technical people
+
+  ── Method 4: Test bad inputs (validation) ────────────────────────
+
+  # Test: missing field
+  curl -X POST "http://localhost:8000/predict" \
+    -H "Content-Type: application/json" \
+    -d '{"sepal_length": 5.1}'
+  # Expected: 422 Unprocessable Entity (validation error)
+
+  # Test: negative value
+  curl -X POST "http://localhost:8000/predict" \
+    -H "Content-Type: application/json" \
+    -d '{"sepal_length":-1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
+  # Expected: 422 Unprocessable Entity (negative value rejected)
+
+====================================================================
+PART C — RUN API UNIT TESTS
+====================================================================
+
+  # Run API tests (no live server needed — uses TestClient)
+  pytest tests/test_api.py -v
+
+  # Expected:
+  # PASSED tests/test_api.py::test_health_returns_200
+  # PASSED tests/test_api.py::test_predict_returns_200
+  # PASSED tests/test_api.py::test_predict_response_structure
+  # PASSED tests/test_api.py::test_predict_class_name_is_valid
+  # PASSED tests/test_api.py::test_predict_confidence_in_range
+  # PASSED tests/test_api.py::test_predict_rejects_negative_values
+  # PASSED tests/test_api.py::test_predict_rejects_missing_fields
+  # PASSED tests/test_api.py::test_predict_rejects_string_values
+
+====================================================================
+PART D — RUN API AS BACKGROUND SERVICE
+====================================================================
+
+  # Create API startup script
+  cat > ~/start-api.sh << 'SCRIPT'
+  #!/bin/bash
+  cd ~/projects/mlops-project
+  source venv/bin/activate
+  
+  nohup uvicorn src.api:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    > ~/api-server.log 2>&1 &
+  
+  echo $! > ~/api.pid
+  sleep 2
+  
+  if curl -s http://localhost:8000/health > /dev/null; then
+      echo "✅  API running at http://localhost:8000"
+      echo "    Swagger docs: http://localhost:8000/docs"
+  else
+      echo "❌  API failed. Check ~/api-server.log"
+  fi
+  SCRIPT
+
+  chmod +x ~/start-api.sh
+
+  cat > ~/stop-api.sh << 'SCRIPT'
+  #!/bin/bash
+  if [ -f ~/api.pid ]; then
+      kill $(cat ~/api.pid) 2>/dev/null
+      rm ~/api.pid
+      echo "✅  API stopped"
+  fi
+  SCRIPT
+
+  chmod +x ~/stop-api.sh
+
+  # Add aliases
+  echo "alias start-api='bash ~/start-api.sh'" >> ~/.bashrc
+  echo "alias stop-api='bash ~/stop-api.sh'" >> ~/.bashrc
+  echo "alias api-logs='tail -f ~/api-server.log'" >> ~/.bashrc
+  source ~/.bashrc
+
+  # Usage:
+  # start-api   → starts API in background
+  # stop-api    → stops API
+  # api-logs    → watch live logs
+
+====================================================================
+PART E — PERFORMANCE TESTING
+====================================================================
+
+  # Your machine (14 cores, 25GB) can handle concurrent requests
+  # Test with multiple simultaneous requests:
+
+  python3 -c "
+  import requests
+  import threading
+  import time
+  
+  url = 'http://localhost:8000/predict'
+  payload = {'sepal_length':5.1,'sepal_width':3.5,'petal_length':1.4,'petal_width':0.2}
+  results = []
+  
+  def make_request():
+      start = time.time()
+      r = requests.post(url, json=payload)
+      elapsed = time.time() - start
+      results.append(elapsed)
+  
+  # Send 20 concurrent requests
+  threads = [threading.Thread(target=make_request) for _ in range(20)]
+  start = time.time()
+  for t in threads: t.start()
+  for t in threads: t.join()
+  total = time.time() - start
+  
+  print(f'20 requests completed in {total:.2f}s')
+  print(f'Average response time: {sum(results)/len(results)*1000:.1f}ms')
+  print(f'Max response time: {max(results)*1000:.1f}ms')
+  "
+
+  # Expected on your machine:
+  # 20 requests completed in ~0.5s
+  # Average response time: ~50ms
+
+====================================================================
+NEXT STEP → See STEP_6_MONITORING.txt
+====================================================================

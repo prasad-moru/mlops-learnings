@@ -1,0 +1,89 @@
+
+====================================================================
+  STEP 7 — DOCKER SETUP (OPTIONAL — ALTERNATIVE TO STEPS 1-6)
+====================================================================
+
+WHY Docker vs manual setup?
+  Manual (Steps 1-6): Full control, easy debugging, good for learning
+  Docker: One command spins up everything, same on any machine
+
+  Recommendation: Learn Steps 1-6 first to understand each component.
+  Then use Docker in production or when onboarding new team members.
+
+====================================================================
+PART A — VERIFY DOCKER IS WORKING
+====================================================================
+
+  # Make sure Docker service is running
+  sudo service docker start
+
+  # Test Docker
+  docker run hello-world
+  # Expected: "Hello from Docker!"
+
+  docker --version
+  docker compose version
+
+====================================================================
+PART B — START FULL STACK WITH DOCKER COMPOSE
+====================================================================
+
+  cd ~/projects/mlops-project
+
+  # Build and start PostgreSQL + MLflow
+  docker compose up -d
+
+  # Watch startup logs
+  docker compose logs -f
+
+  # Verify both containers are running
+  docker compose ps
+
+  # Expected output:
+  # NAME                  STATUS    PORTS
+  # mlops-project-db-1    Up        0.0.0.0:5432->5432/tcp
+  # mlops-project-mlflow-1 Up       0.0.0.0:5000->5000/tcp
+
+  # Open MLflow UI
+  # http://localhost:5000
+
+====================================================================
+PART C — RUN TRAINING AGAINST DOCKER MLFLOW
+====================================================================
+
+  # The .env file points to localhost:5000 which is Docker MLflow
+  # Everything else stays the same
+
+  source venv/bin/activate
+  python src/train.py
+
+  # Results appear in http://localhost:5000 as before
+
+====================================================================
+PART D — USEFUL DOCKER COMMANDS
+====================================================================
+
+  # Stop all containers
+  docker compose down
+
+  # Stop and delete volumes (deletes MLflow data)
+  docker compose down -v
+
+  # Restart just MLflow service
+  docker compose restart mlflow
+
+  # View MLflow container logs
+  docker compose logs mlflow -f
+
+  # View PostgreSQL logs
+  docker compose logs db -f
+
+  # Shell into MLflow container
+  docker compose exec mlflow bash
+
+  # Shell into PostgreSQL container
+  docker compose exec db psql -U mlflow_user -d mlflow_db
+
+====================================================================
+NEXT STEP → See STEP_8_VSCODE_SETUP.txt
+====================================================================

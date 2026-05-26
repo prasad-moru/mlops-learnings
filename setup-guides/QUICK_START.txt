@@ -1,0 +1,82 @@
+
+╔══════════════════════════════════════════════════════════════════════╗
+║         MLOPS PROJECT — COMPLETE SETUP QUICK START                  ║
+║         Machine: AMD Ryzen 7 7735HS | 14 Cores | 25GB RAM           ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+READ THE NUMBERED STEP FILES IN ORDER:
+  STEP_1_WSL_SYSTEM_SETUP.txt       → Install Python, PostgreSQL, Docker
+  STEP_2_PROJECT_SETUP.txt          → Virtual env, dependencies, .env
+  STEP_3_MLFLOW_SERVER.txt          → Start & configure MLflow
+  STEP_4_RUN_TRAINING.txt           → Train, experiment, tune, register
+  STEP_5_API_DEPLOYMENT.txt         → Start & test FastAPI
+  STEP_6_MONITORING.txt             → Drift detection
+  STEP_7_DOCKER_SETUP.txt           → Docker alternative (optional)
+  STEP_8_VSCODE_SETUP.txt           → VS Code for WSL
+  STEP_9_DAILY_WORKFLOW.txt         → Daily commands & cheat sheet
+
+══════════════════════════════════════════════════════════════════════
+SUPER FAST SETUP (after reading Step 1 and Step 2)
+══════════════════════════════════════════════════════════════════════
+
+  # 1. System packages (WSL Ubuntu terminal)
+sudo apt update && sudo apt install -y \
+  python3-venv python3-dev python3-pip \
+  libpq-dev \
+  postgresql postgresql-contrib
+
+  # 2. Start PostgreSQL + create database
+
+sudo apt install -y postgresql postgresql-contrib libpq-dev
+
+  sudo systemctl status postgresql
+  sudo -u postgres psql 
+
+  CREATE DATABASE mlflow_db;
+  CREATE USER mlflow_user WITH PASSWORD 'mlflow_password_2026';
+  GRANT ALL PRIVILEGES ON DATABASE mlflow_db TO mlflow_user;
+  ALTER DATABASE mlflow_db OWNER TO mlflow_user;
+  \q
+ 
+
+  # 3. Setup project
+  cd ~/mlops-learnings
+  python3 -m venv venv
+  source venv/bin/activate
+  pip install -r requirements.txt
+  cp .env.example .env
+
+  # 4. Start MLflow
+  mkdir -p ~/artifacts
+  mlflow server \
+    --backend-store-uri postgresql://mlflow_user:mlflow_password_2026@localhost/mlflow_db \
+    --default-artifact-root ~/artifacts \
+    --host 0.0.0.0 --port 5000
+
+  # 5. Run the full pipeline
+  python src/train.py
+  python src/experiment.py
+  python src/model_registry.py
+  uvicorn src.api:app --host 0.0.0.0 --port 8000 &
+
+  # 6. Test
+  curl http://localhost:8000/health
+  curl -X POST http://localhost:8000/predict \
+    -H "Content-Type: application/json" \
+    -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
+
+  # 7. Open MLflow UI in Windows browser
+  #    http://localhost:5000
+
+══════════════════════════════════════════════════════════════════════
+WHAT YOU WILL HAVE AFTER FULL SETUP
+══════════════════════════════════════════════════════════════════════
+
+  Service           URL                          Purpose
+  ─────────────────────────────────────────────────────────────────
+  MLflow UI         http://localhost:5000         View experiments
+  FastAPI           http://localhost:8000         Serve predictions
+  API Docs          http://localhost:8000/docs    Interactive API docs
+  PostgreSQL        localhost:5432                Store ML metadata
+
+══════════════════════════════════════════════════════════════════════

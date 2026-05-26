@@ -1,0 +1,236 @@
+
+====================================================================
+  STEP 4 — RUNNING TRAINING, EXPERIMENTS & HYPERPARAMETER TUNING
+====================================================================
+
+Before every session, run this checklist:
+  □ sudo service postgresql start
+  □ start-mlflow
+  □ cd ~/projects/mlops-project && source venv/bin/activate
+  □ Open http://localhost:5000 in browser
+
+====================================================================
+PART A — RUN BASELINE TRAINING
+====================================================================
+
+WHY start here?
+  train.py is the foundation. All other scripts (experiment.py,
+  hyperparameter_tuning.py) import functions from train.py.
+  Always verify train.py works first.
+
+  # Navigate to project
+  cd ~/projects/mlops-project
+  source venv/bin/activate
+
+  # Run baseline training
+  python src/train.py
+
+  # Expected output:
+  # ──────────────────────────────────────────────────────
+  # 2024-XX-XX - INFO - Loading Iris dataset …
+  # 2024-XX-XX - INFO - Train: 120 | Test: 30
+  # 2024-XX-XX - INFO - Training RF n_estimators=100 max_depth=5
+  # 2024-XX-XX - INFO - Training complete ✓
+  # 2024-XX-XX - INFO - Evaluating model …
+  # 2024-XX-XX - INFO - Accuracy: 0.9667  F1: 0.9667
+  # 2024-XX-XX - INFO - Creating visualisations …
+  # 2024-XX-XX - INFO - 3 visualisations created ✓
+  # 2024-XX-XX - INFO - Run ID: abc123...
+  #
+  # ✅  TRAINING COMPLETED SUCCESSFULLY
+  # ════════════════════════════════════════
+  # 📊 METRICS:
+  #    ├── accuracy     : 0.9667
+  #    ├── f1_score     : 0.9667
+  #    ├── precision    : 0.9677
+  #    ├── recall       : 0.9667
+  #    └── roc_auc      : 0.9981
+  # ──────────────────────────────────────────────────────
+
+  # ── What to check in MLflow UI ───────────────────────────────────
+  # 1. Go to http://localhost:5000
+  # 2. Click "iris_classification" experiment
+  # 3. You see your first run!
+  # 4. Click the run name
+  # 5. Verify:
+  #    - Parameters tab: n_estimators=100, max_depth=5
+  #    - Metrics tab: accuracy=0.97
+  #    - Artifacts tab: confusion_matrix.png, feature_importance.png
+
+====================================================================
+PART B — RUN MULTIPLE EXPERIMENTS
+====================================================================
+
+WHY run experiments?
+  One training run tells you ONE result.
+  Multiple experiments tell you WHICH CONFIGURATION IS BEST.
+  This is systematic ML development.
+
+  # Run all 5 configurations
+  python src/experiment.py
+
+  # Expected output:
+  # ═══════════════════════════════════════════════════
+  # MULTI-EXPERIMENT RUN
+  # ═══════════════════════════════════════════════════
+  # [1/5] rf_n50_d3_shallow_small
+  #   accuracy=0.9000  f1=0.9000
+  # [2/5] rf_n100_d5_baseline
+  #   accuracy=0.9667  f1=0.9667
+  # [3/5] rf_n150_d7_medium
+  #   accuracy=0.9667  f1=0.9667
+  # [4/5] rf_n200_d10_deep_large
+  #   accuracy=0.9667  f1=0.9667
+  # [5/5] rf_n300_dNone_unlimited_depth
+  #   accuracy=0.9667  f1=0.9667
+  #
+  # 📊  EXPERIMENT SUMMARY (ranked by accuracy)
+  # ═══════════════════════════════════════════════════
+  # config       n_estimators  max_depth  accuracy  f1
+  # baseline          100          5       0.9667   0.9667
+  # ...
+
+  # ── Compare in MLflow UI ─────────────────────────────────────────
+  # 1. Go to http://localhost:5000
+  # 2. Click "iris_classification"
+  # 3. Select all 5 runs (checkboxes)
+  # 4. Click "Compare" button
+  # 5. See:
+  #    - Parameter table (side by side)
+  #    - Parallel coordinates plot
+  #    - Metric charts
+  # KEY INSIGHT: More trees doesn't always mean better accuracy!
+
+====================================================================
+PART C — HYPERPARAMETER TUNING WITH OPTUNA
+====================================================================
+
+WHY Optuna?
+  Manual search: test 16 combinations (4×4 grid) = slow
+  Optuna: tests 50 combinations intelligently in same time
+  Optuna LEARNS from bad results → focuses on good regions
+
+  # Run hyperparameter tuning (50 trials)
+  # Note: Takes ~5-10 minutes on your 14-core machine
+  python src/hyperparameter_tuning.py
+
+  # Expected output:
+  # ═══════════════════════════════════════════════════
+  # HYPERPARAMETER TUNING  (50 trials)
+  # ═══════════════════════════════════════════════════
+  # [I 2024-XX-XX] Trial 0 finished with value: 0.9667
+  # [I 2024-XX-XX] Trial 1 finished with value: 0.9333
+  # [I 2024-XX-XX] Trial 2 finished with value: 0.9667
+  # ...
+  # Best is trial X with value: 0.9667
+  #
+  # ✅  TUNING COMPLETE
+  # ═══════════════════════════════════════════════════
+  # 🏆 Best accuracy : 0.9667
+  # 🔧 Best params   :
+  #    ├── n_estimators: 156
+  #    ├── max_depth: 8
+  #    ├── min_samples_split: 2
+  #    └── min_samples_leaf: 1
+
+  # ── View in MLflow UI ────────────────────────────────────────────
+  # 1. Click "iris_classification_tuning" experiment
+  # 2. See all 50 trials as runs
+  # 3. Sort by accuracy (click column header)
+  # 4. Top run = best hyperparameters
+
+  # ── Speed up tuning (use more cores) ─────────────────────────────
+  # Your machine has 14 cores. Edit hyperparameter_tuning.py to use
+  # parallel trials:
+  #
+  # study.optimize(objective, n_trials=50, n_jobs=6)
+  #                                        ^^^^^^^^ Use 6 parallel workers
+
+====================================================================
+PART D — REGISTER THE BEST MODEL
+====================================================================
+
+WHY register?
+  Without registry: model is just a file in a folder.
+  With registry: model has version, stage, metadata, and
+                 can be loaded by name in your API.
+
+  # Register best model from iris_classification experiment
+  python src/model_registry.py
+
+  # Expected output:
+  # ═══════════════════════════════════════════════════
+  # MODEL REGISTRY WORKFLOW
+  # ═══════════════════════════════════════════════════
+  # Best run → ID: abc123...  accuracy: 0.9667
+  # Registering model from run abc123...
+  # Registered  → iris_classifier version 1
+  # ✅  iris_classifier v1 is now in Production
+  # 
+  # 📦  iris_classifier — All Versions
+  # ═══════════════════════════════════════════════════
+  #   v1  stage=Production    run=abc123…
+
+  # ── Check in MLflow UI ───────────────────────────────────────────
+  # 1. Click "Models" in left sidebar
+  # 2. See "iris_classifier"
+  # 3. Click it → see version 1 in Production stage
+  # 4. Click version → see run it came from, accuracy, date
+
+====================================================================
+PART E — RUN PREDICTIONS
+====================================================================
+
+  # Test predictions using the registered Production model
+  python src/predict.py
+
+  # Expected output:
+  # === PREDICTIONS ===
+  #   Sample 1: setosa    (confidence: 98.00%)
+  #   Sample 2: versicolor (confidence: 72.00%)
+  #   Sample 3: virginica  (confidence: 88.00%)
+
+====================================================================
+PART F — RUN ALL TESTS
+====================================================================
+
+WHY tests?
+  Before deploying, verify code hasn't broken anything.
+  CI/CD runs these automatically on every git push.
+
+  # Run all unit tests
+  pytest tests/ -v
+
+  # Expected output:
+  # tests/test_train.py::test_load_data_returns_correct_structure PASSED
+  # tests/test_train.py::test_data_shapes PASSED
+  # tests/test_train.py::test_no_missing_values PASSED
+  # tests/test_train.py::test_minimum_accuracy PASSED
+  # ... (all tests should PASS)
+
+  # Run with coverage report
+  pytest tests/ -v --cov=src --cov-report=term-missing
+
+  # Shows which lines of code are NOT tested yet
+
+====================================================================
+PART G — WORKFLOW SUMMARY (run in this order)
+====================================================================
+
+  First time:
+    1. python src/train.py              # baseline
+    2. python src/experiment.py         # compare configs
+    3. python src/hyperparameter_tuning.py  # optimise
+    4. python src/model_registry.py     # register best
+    5. python src/predict.py            # test predictions
+    6. pytest tests/ -v                 # verify tests pass
+
+  Daily development:
+    1. start-mlflow                     # start services
+    2. python src/train.py              # train new model
+    3. python src/model_registry.py     # if better, promote
+    4. pytest tests/ -v                 # verify nothing broke
+
+====================================================================
+NEXT STEP → See STEP_5_API_DEPLOYMENT.txt
+====================================================================

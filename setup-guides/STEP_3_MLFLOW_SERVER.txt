@@ -1,0 +1,234 @@
+
+====================================================================
+  STEP 3 — MLFLOW SERVER SETUP & CONFIGURATION
+====================================================================
+
+====================================================================
+PART A — START MLFLOW TRACKING SERVER
+====================================================================
+
+WHY a server (not just mlflow ui)?
+  'mlflow ui'      → SQLite only, single user, no PostgreSQL
+  'mlflow server'  → PostgreSQL backend, multi-user, production-grade
+
+  # Make sure you're in project with venv active
+  cd ~/projects/mlops-project
+  source venv/bin/activate
+
+  # Make sure PostgreSQL is running
+  sudo service postgresql start
+
+  # Create artifacts directory
+  mkdir -p ~/mlflow-artifacts
+
+  # Start MLflow server with PostgreSQL backend
+  mlflow server \
+    --backend-store-uri postgresql://mlflow_user:mlflow_password_2024@localhost/mlflow_db \
+    --default-artifact-root ~/mlflow-artifacts \
+    --host 0.0.0.0 \
+    --port 5000 \
+    --workers 2
+
+  # Explanation of flags:
+  # --backend-store-uri  → PostgreSQL connection string (stores params/metrics)
+  # --default-artifact-root → Where model files/plots are saved
+  # --host 0.0.0.0       → Listen on all network interfaces
+  # --port 5000          → Port number
+  # --workers 2          → Handle 2 requests simultaneously
+
+  # Expected output:
+  # [INFO] Starting gunicorn 21.2.0
+  # [INFO] Listening at: http://0.0.0.0:5000
+
+  # ── Open MLflow UI in Windows Browser ────────────────────────────
+  # Open Chrome/Edge on Windows and go to:
+  #   http://localhost:5000
+  # You should see the MLflow UI with empty experiments
+
+====================================================================
+PART B — RUN MLFLOW AS A BACKGROUND SERVICE
+====================================================================
+
+WHY background service?
+  Running 'mlflow server' in terminal blocks the terminal.
+  You need the same terminal to run Python scripts.
+  Solution: Run MLflow as a background systemd-like service.
+
+  # ── OPTION 1: Simple background process ──────────────────────────
+  
+  # Start MLflow in background (& at end)
+  nohup mlflow server \
+    --backend-store-uri postgresql://mlflow_user:mlflow_password_2024@localhost/mlflow_db \
+    --default-artifact-root ~/mlflow-artifacts \
+    --host 0.0.0.0 \
+    --port 5000 \
+    --workers 2 \
+    > ~/mlflow-server.log 2>&1 &
+
+  # Save the process ID
+  echo $! > ~/mlflow.pid
+  echo "MLflow PID: $(cat ~/mlflow.pid)"
+
+  # Verify it started
+  sleep 3
+  curl http://localhost:5000/health
+  # Expected: {"status": "OK"}
+
+  # ── OPTION 2: Create a startup script ───────────────────────────
+
+  # Create a convenient start script
+  cat > ~/start-mlflow.sh << 'SCRIPT'
+  #!/bin/bash
+  echo "Starting services..."
+  
+  # Start PostgreSQL
+  sudo service postgresql start
+  sleep 2
+  
+  # Start MLflow
+  source ~/projects/mlops-project/venv/bin/activate
+  
+  nohup mlflow server \
+    --backend-store-uri postgresql://mlflow_user:mlflow_password_2024@localhost/mlflow_db \
+    --default-artifact-root ~/mlflow-artifacts \
+    --host 0.0.0.0 \
+    --port 5000 \
+    --workers 2 \
+    > ~/mlflow-server.log 2>&1 &
+  
+  echo $! > ~/mlflow.pid
+  sleep 3
+  
+  if curl -s http://localhost:5000/health > /dev/null; then
+      echo "✅  MLflow running at http://localhost:5000"
+  else
+      echo "❌  MLflow failed to start. Check ~/mlflow-server.log"
+  fi
+  SCRIPT
+
+  # Make it executable
+  chmod +x ~/start-mlflow.sh
+
+  # Create a stop script
+  cat > ~/stop-mlflow.sh << 'SCRIPT'
+  #!/bin/bash
+  if [ -f ~/mlflow.pid ]; then
+      kill $(cat ~/mlflow.pid) 2>/dev/null
+      rm ~/mlflow.pid
+      echo "✅  MLflow stopped"
+  else
+      echo "MLflow PID file not found"
+  fi
+  SCRIPT
+
+  chmod +x ~/stop-mlflow.sh
+
+  # Add aliases to .bashrc
+  echo "alias start-mlflow='bash ~/start-mlflow.sh'" >> ~/.bashrc
+  echo "alias stop-mlflow='bash ~/stop-mlflow.sh'" >> ~/.bashrc
+  echo "alias mlflow-logs='tail -f ~/mlflow-server.log'" >> ~/.bashrc
+  source ~/.bashrc
+
+  # Usage:
+  # start-mlflow   → starts PostgreSQL + MLflow
+  # stop-mlflow    → stops MLflow
+  # mlflow-logs    → watch live logs
+
+====================================================================
+PART C — VERIFY MLFLOW DATABASE TABLES
+====================================================================
+
+  # After first start, MLflow creates tables in PostgreSQL
+  sudo -u postgres psql -d mlflow_db -c "\dt"
+  
+  # Expected tables:
+  # alembic_version
+  # experiment_tags
+  # experiments
+  # latest_metrics
+  # metrics
+  # model_version_tags
+  # model_versions
+  # params
+  # registered_model_aliases
+  # registered_model_tags
+  # registered_models
+  # runs
+  # tags
+
+  # If tables don't appear, check the log:
+  cat ~/mlflow-server.log | tail -20
+
+====================================================================
+PART D — MLFLOW UI OVERVIEW (what to click)
+====================================================================
+
+Open http://localhost:5000 in your Windows browser.
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  MLflow UI Layout                                            │
+  ├─────────────────────────────────────────────────────────────┤
+  │  Left Sidebar:                                               │
+  │    Experiments → List of all experiments                     │
+  │    Models      → Model Registry (registered models)         │
+  │                                                              │
+  │  Main Area (after clicking an experiment):                   │
+  │    Table of all runs with:                                   │
+  │      - Run Name                                              │
+  │      - Created Time                                          │
+  │      - Duration                                              │
+  │      - Parameters (n_estimators, max_depth, etc.)           │
+  │      - Metrics (accuracy, f1_score, etc.)                   │
+  │                                                              │
+  │  Clicking a Run shows:                                       │
+  │    - All parameters logged                                   │
+  │    - All metrics (with charts over time)                     │
+  │    - Artifacts (confusion_matrix.png, etc.)                  │
+  │    - Model section (to register)                             │
+  └─────────────────────────────────────────────────────────────┘
+
+====================================================================
+PART E — TROUBLESHOOTING MLFLOW SERVER
+====================================================================
+
+  Problem: "Connection refused" at localhost:5000
+  ─────────────────────────────────────────────────
+  Solution:
+    # Check if MLflow is running
+    ps aux | grep mlflow
+    
+    # Check the log for errors
+    cat ~/mlflow-server.log | tail -30
+    
+    # Restart
+    stop-mlflow
+    start-mlflow
+
+  Problem: "FATAL: password authentication failed for user mlflow_user"
+  ────────────────────────────────────────────────────────────────────
+  Solution:
+    sudo -u postgres psql
+    ALTER USER mlflow_user WITH PASSWORD 'mlflow_password_2024';
+    \q
+
+  Problem: Port 5000 already in use
+  ─────────────────────────────────────────────────
+  Solution:
+    # Find what's using port 5000
+    sudo lsof -i :5000
+    
+    # Kill it
+    sudo kill -9 <PID>
+    
+    # Or use a different port (change 5000 to 5001 everywhere)
+
+  Problem: MLflow tables not created
+  ─────────────────────────────────────────────────
+  Solution:
+    # Run MLflow upgrade
+    mlflow db upgrade \
+      postgresql://mlflow_user:mlflow_password_2024@localhost/mlflow_db
+
+====================================================================
+NEXT STEP → See STEP_4_RUN_TRAINING.txt
+====================================================================

@@ -1,0 +1,205 @@
+
+====================================================================
+  STEP 1 — WSL UBUNTU SYSTEM SETUP
+  Machine: AMD Ryzen 7 7735HS | 14 Cores | 25GB RAM
+====================================================================
+
+YOUR MACHINE ANALYSIS:
+======================
+  CPU  : AMD Ryzen 7 7735HS — 7 cores / 14 threads  ← Excellent for parallel training
+  RAM  : 25GB total, 23GB free                        ← Plenty for MLflow + PostgreSQL + API
+  SWAP : 8GB available                                ← Good fallback
+  OS   : WSL2 Ubuntu (x86_64)
+
+WHY WSL2?
+  Windows gives you GUI tools (VS Code, browser for MLflow UI)
+  Ubuntu gives you Linux commands, Docker, PostgreSQL
+  WSL2 bridges both worlds perfectly for MLOps development
+
+====================================================================
+PART A — CONFIGURE WSL2 MEMORY (Do this FIRST)
+====================================================================
+
+WHY: By default WSL2 only uses 50% of RAM (12GB from your 25GB).
+     We need to give it more for running PostgreSQL + MLflow + API.
+
+STEP 1: Open Windows Notepad (NOT WSL terminal)
+
+STEP 2: Create this file at:
+         C:\Users\<YourWindowsUsername>\.wslconfig
+
+  Paste exactly:
+  ─────────────────────────────────────────
+  [wsl2]
+  memory=20GB
+  processors=12
+  swap=4GB
+  localhostForwarding=true
+  ─────────────────────────────────────────
+
+  WHY these values:
+    memory=20GB    → Leaves 5GB for Windows itself
+    processors=12  → Uses 12 of your 14 threads for WSL
+    swap=4GB       → Extra safety net
+
+STEP 3: Restart WSL from Windows PowerShell (run as Admin):
+  wsl --shutdown
+  wsl
+
+STEP 4: Verify in your WSL Ubuntu terminal:
+  free -mh
+  
+  You should now see ~20GB total memory.
+
+====================================================================
+PART B — UPDATE UBUNTU PACKAGES
+====================================================================
+
+Run these commands one by one in your WSL Ubuntu terminal:
+
+  # Update package list
+  sudo apt update
+
+  # Upgrade existing packages
+  sudo apt upgrade -y
+
+  # Install essential build tools
+  sudo apt install -y \
+    build-essential \
+    git \
+    curl \
+    wget \
+    unzip \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    lsb-release
+
+  WHY each package:
+    build-essential → Compiles Python C extensions (psycopg2, numpy)
+    git             → Version control
+    curl/wget       → Download files
+    gnupg           → Docker GPG key verification
+
+====================================================================
+PART C — INSTALL PYTHON 3.9
+====================================================================
+
+  # Add Python PPA for latest versions
+  sudo add-apt-repository ppa:deadsnakes/ppa -y
+  sudo apt update
+
+  # Install Python 3.9 and tools
+  sudo apt install -y \
+    python3.9 \
+    python3.9-venv \
+    python3.9-dev \
+    python3-pip \
+    python3.9-distutils
+
+  # Verify
+  python3.9 --version
+  # Expected output: Python 3.9.x
+
+  # Set Python 3.9 as default python3
+  sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1
+  sudo update-alternatives --install /usr/bin/python python python3.9 1
+
+  # Verify
+  python --version
+  python3 --version
+
+====================================================================
+PART D — INSTALL POSTGRESQL 14
+====================================================================
+
+WHY PostgreSQL?
+  MLflow needs a database to store:
+  - Experiment names and IDs
+  - Run parameters and metrics
+  - Model registry versions
+  SQLite (default) loses data; PostgreSQL is production-grade.
+
+  # Install PostgreSQL
+  sudo apt install -y postgresql-14 postgresql-contrib-14 libpq-dev
+
+  # Start PostgreSQL service
+  sudo service postgresql start
+
+  # Enable auto-start (WSL specific workaround)
+  echo "sudo service postgresql start" >> ~/.bashrc
+
+  # Verify PostgreSQL is running
+  sudo service postgresql status
+  # Expected: "Active" or "online"
+
+  # Create MLflow database and user
+  sudo -u postgres psql << 'EOF'
+  CREATE DATABASE mlflow_db;
+  CREATE USER mlflow_user WITH PASSWORD 'mlflow_password_2024';
+  GRANT ALL PRIVILEGES ON DATABASE mlflow_db TO mlflow_user;
+  ALTER DATABASE mlflow_db OWNER TO mlflow_user;
+  \c mlflow_db
+  GRANT ALL ON SCHEMA public TO mlflow_user;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO mlflow_user;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO mlflow_user;
+  \q
+  EOF
+
+  # Test the connection
+  psql -U mlflow_user -d mlflow_db -h localhost -c "SELECT version();"
+  # Enter password: mlflow_password_2024
+  # Expected: PostgreSQL version output
+
+====================================================================
+PART E — INSTALL DOCKER (for docker-compose option)
+====================================================================
+
+  # Add Docker GPG key
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+    sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+  # Add Docker repository
+  echo "deb [arch=$(dpkg --print-architecture) \
+    signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] \
+    https://download.docker.com/linux/ubuntu \
+    $(lsb_release -cs) stable" | \
+    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+  # Install Docker
+  sudo apt update
+  sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+  # Add your user to docker group (no sudo needed)
+  sudo usermod -aG docker $USER
+
+  # Restart WSL to apply group change
+  # (close terminal, reopen, or run: newgrp docker)
+
+  # Verify Docker
+  docker --version
+  docker compose version
+
+  # Start Docker service
+  sudo service docker start
+  echo "sudo service docker start" >> ~/.bashrc
+
+====================================================================
+PART F — VERIFY ALL SERVICES
+====================================================================
+
+  # Check all services are running
+  sudo service postgresql status
+  sudo service docker status
+
+  # Check Python
+  python --version
+  pip --version
+
+  # Check available RAM (should show ~20GB)
+  free -mh
+
+====================================================================
+NEXT STEP → See STEP_2_PROJECT_SETUP.txt
+====================================================================

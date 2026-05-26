@@ -1,0 +1,39 @@
+*.pyc
+__pycache__/
+mlruns/
+mlartifacts/
+.env
+*.pkl
+data/*.csv
+artifacts/*.png
+artifacts/*.txt
+.pytest_cache/
+htmlcov/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+
+
+# Python virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# MLflow
+mlruns/
+
+# Environment files
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# Logs
+*.log

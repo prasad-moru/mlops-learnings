@@ -1,0 +1,204 @@
+
+====================================================================
+  STEP 2 — PROJECT SETUP & PYTHON ENVIRONMENT
+  Run these commands in your WSL Ubuntu terminal
+====================================================================
+
+====================================================================
+PART A — CREATE PROJECT DIRECTORY
+====================================================================
+
+  # Navigate to home directory
+  cd ~
+
+  # Create projects folder
+  mkdir -p ~/projects
+  cd ~/projects
+
+  # Unzip the project (assuming you copied the zip to WSL)
+  # Option 1: If zip is in Windows Downloads folder:
+  cp /mnt/c/Users/<YourWindowsUsername>/Downloads/complete-mlops-project.zip .
+  
+  # Option 2: If already in WSL home:
+  # (already here, skip copy)
+
+  # Extract the zip
+  unzip complete-mlops-project.zip
+
+  # Enter the project
+  cd mlops-project
+
+  # Verify structure
+  ls -la
+  # Expected output:
+  # ├── src/
+  # ├── tests/
+  # ├── config/
+  # ├── artifacts/
+  # ├── data/
+  # ├── docs/
+  # ├── .github/
+  # ├── Dockerfile
+  # ├── docker-compose.yml
+  # ├── requirements.txt
+  # ├── .env.example
+  # └── .gitignore
+
+  # Verify src/ has ALL files
+  ls -la src/
+  # Expected:
+  # api.py
+  # config.py
+  # data_versioning.py
+  # experiment.py
+  # hyperparameter_tuning.py
+  # model_registry.py
+  # monitoring.py
+  # predict.py
+  # train.py
+
+====================================================================
+PART B — CREATE PYTHON VIRTUAL ENVIRONMENT
+====================================================================
+
+WHY virtual environment?
+  Isolates project dependencies from system Python.
+  Different projects can have different library versions.
+  "pip install" won't break other projects.
+
+  # Create virtual environment using Python 3.9
+  python3.9 -m venv venv
+
+  # Activate the virtual environment
+  source venv/bin/activate
+
+  # You should see (venv) in your terminal prompt:
+  # (venv) devops@cznadmin:~/projects/mlops-project$
+
+  # Upgrade pip inside the venv
+  pip install --upgrade pip setuptools wheel
+
+  # Verify you're using the venv Python
+  which python
+  # Expected: /home/<user>/projects/mlops-project/venv/bin/python
+
+====================================================================
+PART C — INSTALL PYTHON DEPENDENCIES
+====================================================================
+
+  # Make sure venv is active (you see (venv) in prompt)
+  source venv/bin/activate
+
+  # Install all dependencies
+  pip install -r requirements.txt
+
+  # This installs:
+  #   mlflow==2.9.2
+  #   scikit-learn==1.3.2
+  #   pandas==2.1.4
+  #   numpy==1.26.2
+  #   psycopg2-binary==2.9.9  (PostgreSQL driver)
+  #   optuna==3.5.0
+  #   fastapi==0.109.0
+  #   uvicorn==0.27.0
+  #   matplotlib==3.8.2
+  #   seaborn==0.13.0
+  #   scipy==1.11.4
+  #   pytest==7.4.3
+  #   ... and more
+
+  # WHY these take time:
+  #   numpy, scikit-learn compile C extensions
+  #   psycopg2 needs libpq-dev (installed in Step 1)
+
+  # Verify installation
+  pip list | grep -E "mlflow|scikit|pandas|fastapi|optuna"
+  # Should show all packages with correct versions
+
+====================================================================
+PART D — CONFIGURE ENVIRONMENT VARIABLES
+====================================================================
+
+WHY .env file?
+  Keeps secrets (passwords, URIs) out of your code.
+  Different .env for dev/staging/production.
+  Never committed to git.
+
+  # Copy the example env file
+  cp .env.example .env
+
+  # Edit the .env file
+  nano .env
+
+  # Update these values (press Ctrl+X, Y, Enter to save):
+  ─────────────────────────────────────────────────────────
+  MLFLOW_TRACKING_URI=http://localhost:5000
+  EXPERIMENT_NAME=iris_classification
+  RANDOM_SEED=42
+  ENVIRONMENT=development
+
+  POSTGRES_USER=mlflow_user
+  POSTGRES_PASSWORD=mlflow_password_2024
+  POSTGRES_DB=mlflow_db
+  POSTGRES_HOST=localhost
+  POSTGRES_PORT=5432
+
+  MODEL_NAME=iris_classifier
+  MIN_ACCURACY=0.90
+  DRIFT_THRESHOLD=0.05
+
+  API_HOST=0.0.0.0
+  API_PORT=8000
+  ─────────────────────────────────────────────────────────
+
+  # Verify the file was saved
+  cat .env
+
+====================================================================
+PART E — ADD VENV AUTO-ACTIVATION (convenience)
+====================================================================
+
+  # Add to .bashrc so venv activates automatically in this project
+  echo "" >> ~/.bashrc
+  echo "# Auto-activate MLOps project venv" >> ~/.bashrc
+  echo "alias mlops='cd ~/projects/mlops-project && source venv/bin/activate'" >> ~/.bashrc
+
+  # Reload .bashrc
+  source ~/.bashrc
+
+  # Now you can just type 'mlops' to enter the project
+  mlops
+
+====================================================================
+PART F — VERIFY EVERYTHING WORKS
+====================================================================
+
+  # Make sure you're in the project with venv active
+  cd ~/projects/mlops-project
+  source venv/bin/activate
+
+  # Test Python imports
+  python -c "import mlflow; print('MLflow:', mlflow.__version__)"
+  python -c "import sklearn; print('sklearn:', sklearn.__version__)"
+  python -c "import fastapi; print('FastAPI:', fastapi.__version__)"
+  python -c "import psycopg2; print('psycopg2: OK')"
+  python -c "import optuna; print('Optuna:', optuna.__version__)"
+
+  # All should print version numbers without errors
+
+  # Test PostgreSQL connection from Python
+  python -c "
+  import psycopg2
+  conn = psycopg2.connect(
+      host='localhost',
+      database='mlflow_db',
+      user='mlflow_user',
+      password='mlflow_password_2024'
+  )
+  print('PostgreSQL connection: SUCCESS')
+  conn.close()
+  "
+
+====================================================================
+NEXT STEP → See STEP_3_MLFLOW_SERVER.txt
+====================================================================

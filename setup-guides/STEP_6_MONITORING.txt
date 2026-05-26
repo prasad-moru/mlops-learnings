@@ -1,0 +1,117 @@
+
+====================================================================
+  STEP 6 — MODEL MONITORING & DRIFT DETECTION
+====================================================================
+
+====================================================================
+PART A — RUN MONITORING (NO DRIFT)
+====================================================================
+
+WHY monitoring matters:
+  Imagine your iris classifier is deployed in a botanic garden app.
+  Month 1: Works great (flowers match training data distribution)
+  Month 6: Scientists start measuring differently (drift!)
+  WITHOUT monitoring: wrong predictions, no one notices
+  WITH monitoring: alert fires, team retrains, problem fixed fast
+
+  cd ~/projects/mlops-project
+  source venv/bin/activate
+
+  # Run monitoring with no drift (normal production scenario)
+  python src/monitoring.py --drift 0.0
+
+  # Expected output:
+  # ═══════════════════════════════════════════════════
+  # MONITORING RUN
+  # ═══════════════════════════════════════════════════
+  # 📊  DRIFT DETECTION REPORT
+  # ═══════════════════════════════════════════════════
+  #   sepal length (cm)              p=0.8234  ✅  OK
+  #   sepal width (cm)               p=0.9121  ✅  OK
+  #   petal length (cm)              p=0.7654  ✅  OK
+  #   petal width (cm)               p=0.8901  ✅  OK
+  #
+  #   Overall: ✅  No drift detected
+
+====================================================================
+PART B — SIMULATE DRIFT
+====================================================================
+
+  # Simulate production data with heavy drift
+  python src/monitoring.py --drift 1.5
+
+  # Expected output:
+  # ═══════════════════════════════════════════════════
+  # ⚠️  DRIFT in 'sepal length (cm)'  p=0.0001 < 0.05
+  # ⚠️  DRIFT in 'sepal width (cm)'   p=0.0003 < 0.05
+  # ⚠️  DRIFT in 'petal length (cm)'  p=0.0000 < 0.05
+  # ⚠️  DRIFT in 'petal width (cm)'   p=0.0000 < 0.05
+  #
+  # 📊  DRIFT DETECTION REPORT
+  #   sepal length (cm)   p=0.0001  🚨 DRIFT
+  #   sepal width (cm)    p=0.0003  🚨 DRIFT
+  #   petal length (cm)   p=0.0000  🚨 DRIFT
+  #   petal width (cm)    p=0.0000  🚨 DRIFT
+  #
+  #   Overall: 🚨  DRIFT DETECTED — consider retraining!
+
+====================================================================
+PART C — VIEW MONITORING RESULTS IN MLFLOW
+====================================================================
+
+  # In browser: http://localhost:5000
+  # Click "iris_monitoring" experiment
+  # See monitoring runs logged with:
+  #   - pvalue_sepal_length_cm (metric)
+  #   - pvalue_sepal_width_cm  (metric)
+  #   - overall_drift (0 = no drift, 1 = drift)
+
+  # Compare no-drift vs drift run:
+  # Select both runs → Compare
+  # See: p-values are much lower in the drift run
+
+====================================================================
+PART D — RUN MONITORING TESTS
+====================================================================
+
+  pytest tests/test_monitoring.py -v
+
+  # Expected:
+  # PASSED test_no_drift_detected_for_same_distribution
+  # PASSED test_report_contains_all_features
+  # PASSED test_p_values_are_in_valid_range
+  # PASSED test_drift_detected_for_shifted_distribution
+  # PASSED test_drifted_features_have_low_p_values
+  # PASSED test_report_has_required_keys
+  # ... all PASSED
+
+====================================================================
+PART E — SCHEDULED MONITORING (CRON JOB)
+====================================================================
+
+  WHY cron?
+    Monitoring should run automatically every day,
+    not manually. That's what makes it "production".
+
+  # Create monitoring script
+  cat > ~/run-monitoring.sh << 'SCRIPT'
+  #!/bin/bash
+  cd ~/projects/mlops-project
+  source venv/bin/activate
+  python src/monitoring.py --drift 0.0 >> ~/monitoring.log 2>&1
+  SCRIPT
+
+  chmod +x ~/run-monitoring.sh
+
+  # Add to crontab (runs every day at 6 AM)
+  crontab -e
+  
+  # Add this line at the bottom:
+  # 0 6 * * * /home/<username>/run-monitoring.sh
+  
+  # Verify crontab
+  crontab -l
+
+====================================================================
+NEXT STEP → See STEP_7_DOCKER_SETUP.txt
+====================================================================
