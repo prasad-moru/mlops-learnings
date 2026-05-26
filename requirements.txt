@@ -1,9 +1,15 @@
+<<<<<<< HEAD
 # ── Core ML ──────────────────────────────────────────────
 mlflow==3.12.0
+=======
+# Core ML
+mlflow==2.9.2
+>>>>>>> 639cd93ce79453c9bd2d7d7f898bec456d9436c5
 scikit-learn==1.3.2
 pandas==2.1.4
 numpy==1.26.2
 
+<<<<<<< HEAD
 # ── Database backend ─────────────────────────────────────
 psycopg2-binary==2.9.9
 
@@ -18,10 +24,24 @@ pyyaml==6.0.1
 optuna==3.5.0
 
 # ── API serving ───────────────────────────────────────────
+=======
+# Database backend
+psycopg2-binary==2.9.9
+
+# Configuration & environment
+python-dotenv==1.0.0
+pyyaml==6.0.1
+
+# Hyperparameter tuning
+optuna==3.5.0
+
+# API serving
+>>>>>>> 639cd93ce79453c9bd2d7d7f898bec456d9436c5
 fastapi==0.109.0
 uvicorn==0.27.0
 pydantic==2.5.3
 
+<<<<<<< HEAD
 # ── Visualisation ─────────────────────────────────────────
 matplotlib==3.8.2
 seaborn==0.13.0
@@ -30,12 +50,25 @@ seaborn==0.13.0
 scipy==1.11.4
 
 # ── Testing ───────────────────────────────────────────────
+=======
+# Visualisation
+matplotlib==3.8.2
+seaborn==0.13.0
+
+# Statistical tests (drift detection)
+scipy==1.11.4
+
+# Testing
+>>>>>>> 639cd93ce79453c9bd2d7d7f898bec456d9436c5
 pytest==7.4.3
 pytest-cov==4.1.0
 requests==2.31.0
 httpx==0.26.0
+<<<<<<< HEAD
 
 # ── Build tooling (keep packaging happy) ──────────────────
 packaging>=24.0
 setuptools>=68.0
 wheel>=0.47.0
+=======
+>>>>>>> 639cd93ce79453c9bd2d7d7f898bec456d9436c5
