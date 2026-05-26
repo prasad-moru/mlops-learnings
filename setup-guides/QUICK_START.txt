@@ -48,10 +48,7 @@ sudo apt install -y postgresql postgresql-contrib libpq-dev
 
   # 4. Start MLflow
   mkdir -p ~/artifacts
-  mlflow server \
-    --backend-store-uri postgresql://mlflow_user:mlflow_password_2026@localhost/mlflow_db \
-    --default-artifact-root ~/artifacts \
-    --host 0.0.0.0 --port 5000
+  python -m mlflow server --backend-store-uri postgresql://mlflow_user:mlflow_password_2026@localhost/mlflow_db --default-artifact-root ~/artifacts --host 0.0.0.0 --port 5000 &
 
   # 5. Run the full pipeline
   python src/train.py

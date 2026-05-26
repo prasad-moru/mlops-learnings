@@ -1,0 +1,16 @@
+sudo service postgresql start
+
+python3 -m venv venv
+  source venv/bin/activate
+  pip install -r requirements.txt
+  cp .env.example .env
+
+python -m mlflow server --backend-store-uri postgresql://mlflow_user:mlflow_password_2026@localhost/mlflow_db --default-artifact-root ~/artifacts --host 0.0.0.0 --port 5000 &
+python src/train.py
+python src/experiment.py
+python src/hyperparameter_tuning.py
+python src/model_registry.py          # sets champion alias
+python src/predict.py                  # verifies champion loads
+uvicorn src.api:app --host 0.0.0.0 --port 8000 &
+pytest tests/ -v -m "not integration"  # unit tests, no server needed
+pytest scripts/smoke_test_mlflow.py -v -m integration  # needs live MLflow
