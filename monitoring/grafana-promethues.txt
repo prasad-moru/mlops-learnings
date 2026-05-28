@@ -1,0 +1,55 @@
+# Install Prometheus binary
+wget https://github.com/prometheus/prometheus/releases/download/v2.51.0/prometheus-2.51.0.linux-amd64.tar.gz
+tar xvf prometheus-2.51.0.linux-amd64.tar.gz
+cd /opt
+mv prometheus-2.51.0.linux-amd64 prometheus
+
+sudo nano /etc/systemd/system/prometheus.service
+
+[Service]
+Type=simple
+User=devops
+Group=devops
+WorkingDirectory=/opt/prometheus
+
+ExecStart=/opt/prometheus/prometheus \
+  --config.file=/home/devops/mlops-learnings/monitoring/prometheus.yml \
+  --storage.tsdb.path=/opt/prometheus/data \
+  --storage.tsdb.retention.time=15d \
+  --web.listen-address=0.0.0.0:9090 \
+  --web.enable-lifecycle \
+  --log.level=info
+
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+
+NoNewPrivileges=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=prometheus
+
+sudo systemctl daemon-reload
+
+sudo systemctl start prometheus.service
+
+sudo systemctl enable prometheus.service
+
+
+# Install Grafana binary
+
+sudo apt install -y apt-transport-https software-properties-common
+wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+
+sudo apt update && sudo apt install grafana -y
+
+
+sudo systemctl daemon-reload
+
+sudo systemctl start grafana.service
+
+# Access: http://localhost:3000

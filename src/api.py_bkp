@@ -1,18 +1,15 @@
 """
-FastAPI Prediction Service — with Prometheus instrumentation
+FastAPI Prediction Service
 
 WHY  : Mobile apps, web apps, dashboards all need predictions via HTTP.
-HOW  : FastAPI + Pydantic v2 + prometheus_fastapi_instrumentator
-WHEN : After model is promoted to champion alias in the registry
-WHAT : Exposes /predict /health /model-info /metrics endpoints
-
-NEW: /metrics endpoint auto-exposed by prometheus_fastapi_instrumentator
-     Prometheus scrapes it every 15s → Grafana reads from Prometheus.
+       A REST API is language-agnostic — any client can call it.
+HOW  : FastAPI + Pydantic for request validation; model loaded at startup
+WHEN : After model is promoted to Production alias in the registry
+WHERE: Docker container, Kubernetes pod, cloud function
+WHAT : Exposes /predict, /health, /model-info endpoints
 
 Test with:
   uvicorn src.api:app --reload --port 8000
-  curl http://localhost:8000/metrics   ← NEW: Prometheus metrics
-  curl http://localhost:8000/health
   curl -X POST http://localhost:8000/predict \
        -H "Content-Type: application/json" \
        -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
@@ -27,24 +24,28 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 import mlflow.sklearn
 import pandas as pd
-from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── Configuration — reads from your .env ──────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────────
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 MODEL_NAME          = os.getenv("MODEL_NAME", "iris_classifier")
 MODEL_ALIAS         = os.getenv("MODEL_ALIAS", "champion")
 CLASS_NAMES         = ["setosa", "versicolor", "virginica"]
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
+# Global model — loaded once at startup, reused on every request
 model = None
 
 
-# ── Lifespan ──────────────────────────────────────────────────────────────────
+# ── Lifespan: load model on startup, clean up on shutdown ─────────────────────
+# WHY lifespan instead of @app.on_event("startup"):
+#   on_event is deprecated since FastAPI 0.93.
+#   lifespan is the modern, recommended approach.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global model
@@ -54,34 +55,26 @@ async def lifespan(app: FastAPI):
         logger.info(f"Model loaded: {model_uri}")
     except Exception as e:
         logger.error(f"Could not load model '{model_uri}': {e}")
+        logger.warning("API will start but /predict will return 503 until model is available.")
         model = None
     yield
+    # Shutdown: nothing to clean up for sklearn models
     logger.info("API shutting down.")
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title       = "Iris Classifier API",
-    description = "Production ML model — FastAPI + MLflow + Prometheus",
+    description = "Production ML model served via FastAPI + MLflow",
     version     = "1.0.0",
     lifespan    = lifespan,
 )
 
-# ── Prometheus instrumentation ────────────────────────────────────────────────
-# WHY: One line wires up /metrics with zero manual metric code.
-#      Auto-tracks: http_requests_total, http_request_duration_seconds,
-#      http_requests_in_progress — all labelled by endpoint + status code.
-# DOES NOT instrument /health or /metrics itself (excluded_handlers).
-Instrumentator(
-    should_group_status_codes=True,
-    should_ignore_untemplated=True,
-    should_instrument_requests_inprogress=True,
-    excluded_handlers=["/metrics", "/health"],
-    inprogress_labels=True,
-).instrument(app).expose(app, include_in_schema=True, tags=["monitoring"])
 
-
-# ── Schemas ───────────────────────────────────────────────────────────────────
+# ── Request / Response Schemas ────────────────────────────────────────────────
+# WHY Pydantic v2 style:
+#   schema_extra was renamed to json_schema_extra in Pydantic v2.
+#   class Config is replaced by model_config dict.
 class IrisFeatures(BaseModel):
     sepal_length: float = Field(..., gt=0, description="Sepal length in cm")
     sepal_width:  float = Field(..., gt=0, description="Sepal width in cm")
@@ -118,9 +111,12 @@ class HealthResponse(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@app.get("/health", response_model=HealthResponse, tags=["monitoring"])
+@app.get("/health", response_model=HealthResponse)
 def health_check():
-    """Kubernetes liveness probe + load balancer health check."""
+    """
+    WHY  : Load balancers and Kubernetes liveness probes call /health every 30s.
+           Returns 200 if API is up regardless of model state.
+    """
     return HealthResponse(
         status       = "healthy" if model else "model_not_loaded",
         model_loaded = model is not None,
@@ -129,11 +125,15 @@ def health_check():
     )
 
 
-@app.get("/model-info", tags=["model"])
+@app.get("/model-info")
 def model_info():
-    """Returns which model version and alias is currently serving."""
+    """
+    WHY  : Clients need to know which model version and alias is live.
+    WHAT : Returns model name, alias, feature names, and output classes.
+    """
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
+
     return {
         "model_name"   : MODEL_NAME,
         "model_alias"  : MODEL_ALIAS,
@@ -141,31 +141,48 @@ def model_info():
         "classes"      : CLASS_NAMES,
         "n_features"   : 4,
         "feature_names": [
-            "sepal length (cm)", "sepal width (cm)",
-            "petal length (cm)", "petal width (cm)",
+            "sepal length (cm)",
+            "sepal width (cm)",
+            "petal length (cm)",
+            "petal width (cm)",
         ],
     }
 
 
-@app.post("/predict", response_model=PredictionResponse, tags=["inference"])
+@app.post("/predict", response_model=PredictionResponse)
 def predict(features: IrisFeatures):
     """
-    Returns predicted iris class.
-    503 if model not loaded. 422 if input invalid. 500 for unexpected errors.
+    WHY  : Core endpoint — returns predicted iris class for input measurements.
+    HOW  : Pydantic validates input → pandas DataFrame → model.predict()
+    WHEN : Called by any client application needing a classification.
+    NOTE : Returns 503 if model failed to load at startup.
+           Returns 422 if input fails Pydantic validation (missing field, negative value).
+           Returns 500 for unexpected prediction errors.
     """
     if model is None:
         raise HTTPException(
             status_code=503,
-            detail=f"Model '{MODEL_NAME}@{MODEL_ALIAS}' not available. "
-                   "Run model_registry.py first.",
+            detail=f"Model '{MODEL_NAME}@{MODEL_ALIAS}' is not available. "
+                   "Register and alias a model first.",
         )
+
     try:
+        # Build DataFrame with exact column names the model was trained on
         data = pd.DataFrame(
-            [[features.sepal_length, features.sepal_width,
-              features.petal_length, features.petal_width]],
-            columns=["sepal length (cm)", "sepal width (cm)",
-                     "petal length (cm)", "petal width (cm)"],
+            [[
+                features.sepal_length,
+                features.sepal_width,
+                features.petal_length,
+                features.petal_width,
+            ]],
+            columns=[
+                "sepal length (cm)",
+                "sepal width (cm)",
+                "petal length (cm)",
+                "petal width (cm)",
+            ],
         )
+
         prediction = int(model.predict(data)[0])
         proba      = model.predict_proba(data)[0]
         confidence = round(float(proba.max()), 4)
@@ -178,6 +195,7 @@ def predict(features: IrisFeatures):
             model_alias = MODEL_ALIAS,
             timestamp   = datetime.now().isoformat(),
         )
+
     except Exception as e:
         logger.error(f"Prediction error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
