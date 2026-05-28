@@ -14,3 +14,52 @@ python src/predict.py                  # verifies champion loads
 uvicorn src.api:app --host 0.0.0.0 --port 8000 &
 pytest tests/ -v -m "not integration"  # unit tests, no server needed
 pytest scripts/smoke_test_mlflow.py -v -m integration  # needs live MLflow
+
+
+
+
+# Send 50 requests — populates the request rate and latency panels
+python3 -c "
+import requests, time, random
+
+url = 'http://localhost:8000/predict'
+samples = [
+    {'sepal_length':5.1,'sepal_width':3.5,'petal_length':1.4,'petal_width':0.2},
+    {'sepal_length':6.0,'sepal_width':2.7,'petal_length':5.1,'petal_width':1.6},
+    {'sepal_length':6.9,'sepal_width':3.1,'petal_length':5.4,'petal_width':2.1},
+]
+for i in range(50):
+    r = requests.post(url, json=random.choice(samples))
+    print(f'{i+1}/50  {r.json()[\"class_name\"]}  {r.status_code}')
+    time.sleep(0.2)
+print('Done — check Grafana now')
+"
+
+
+
+
+
+
+testing drift 
+
+source venv/bin/activate
+
+
+python src/monitoring.py --drift 1.5
+
+
+To generate continuous traffic:
+
+python3 -c "
+import requests, time, random
+url = 'http://localhost:8000/predict'
+samples = [
+  {'sepal_length':5.1,'sepal_width':3.5,'petal_length':1.4,'petal_width':0.2},
+  {'sepal_length':6.0,'sepal_width':2.7,'petal_length':5.1,'petal_width':1.6},
+  {'sepal_length':6.9,'sepal_width':3.1,'petal_length':5.4,'petal_width':2.1},
+]
+while True:
+    r = requests.post(url, json=random.choice(samples))
+    print(r.json()['class_name'], end=' ', flush=True)
+    time.sleep(1)
+"

@@ -9,7 +9,7 @@ scrape_configs:
   # Metrics: http_requests_total, http_request_duration_seconds, http_requests_in_progress
   - job_name: 'fastapi'
     static_configs:
-      - targets: ['host.docker.internal:8000']
+      - targets: ['localhost:8000']
     metrics_path: '/metrics'
     scrape_interval: 15s
 
@@ -17,7 +17,7 @@ scrape_configs:
   # Source: python src/metrics_server.py running on port 8001
   - job_name: 'ml-metrics'
     static_configs:
-      - targets: ['host.docker.internal:8001']
+      - targets: ['localhost:8001']
     metrics_path: '/metrics'
     scrape_interval: 60s
 

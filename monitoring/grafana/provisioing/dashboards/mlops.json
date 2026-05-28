@@ -1,0 +1,129 @@
+{
+  "title": "MLOps — Iris Classifier",
+  "uid": "mlops-iris-v1",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "tags": ["mlops", "iris"],
+  "panels": [
+    {
+      "id": 1, "title": "API health", "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 3, "h": 4 },
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": { "0": {"text":"DOWN","color":"red"}, "1": {"text":"UP","color":"green"} }}],
+        "thresholds": { "mode": "absolute", "steps": [{"value":0,"color":"red"},{"value":1,"color":"green"}] },
+        "color": { "mode": "thresholds" }
+      }},
+      "targets": [{ "expr": "mlops_api_health", "legendFormat": "API" }]
+    },
+    {
+      "id": 2, "title": "MLflow health", "type": "stat",
+      "gridPos": { "x": 3, "y": 0, "w": 3, "h": 4 },
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": { "0": {"text":"DOWN","color":"red"}, "1": {"text":"UP","color":"green"} }}],
+        "thresholds": { "mode": "absolute", "steps": [{"value":0,"color":"red"},{"value":1,"color":"green"}] },
+        "color": { "mode": "thresholds" }
+      }},
+      "targets": [{ "expr": "mlops_mlflow_health", "legendFormat": "MLflow" }]
+    },
+    {
+      "id": 3, "title": "Champion accuracy", "type": "stat",
+      "gridPos": { "x": 6, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": {
+        "unit": "percentunit", "decimals": 2,
+        "thresholds": { "mode": "absolute", "steps": [{"value":0,"color":"red"},{"value":0.85,"color":"yellow"},{"value":0.90,"color":"green"}] },
+        "color": { "mode": "thresholds" }
+      }},
+      "targets": [{ "expr": "mlops_model_accuracy{alias=\"champion\"}", "legendFormat": "Accuracy" }]
+    },
+    {
+      "id": 4, "title": "Champion version", "type": "stat",
+      "gridPos": { "x": 10, "y": 0, "w": 3, "h": 4 },
+      "fieldConfig": { "defaults": { "color": {"mode":"fixed","fixedColor":"blue"}, "unit": "none", "decimals": 0 }},
+      "targets": [{ "expr": "mlops_model_version{alias=\"champion\"}", "legendFormat": "v" }]
+    },
+    {
+      "id": 5, "title": "Drift status", "type": "stat",
+      "gridPos": { "x": 13, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": { "0": {"text":"CLEAN","color":"green"}, "1": {"text":"DRIFT","color":"red"} }}],
+        "thresholds": { "mode": "absolute", "steps": [{"value":0,"color":"green"},{"value":1,"color":"red"}] },
+        "color": { "mode": "thresholds" }
+      }},
+      "targets": [{ "expr": "mlops_drift_detected", "legendFormat": "Drift" }]
+    },
+    {
+      "id": 6, "title": "API request rate (req/s)", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" }}},
+      "targets": [
+        { "expr": "rate(http_requests_total{job=\"fastapi\",handler=\"/predict\"}[1m])", "legendFormat": "predict" },
+        { "expr": "rate(http_requests_total{job=\"fastapi\",handler=\"/health\"}[1m])", "legendFormat": "health" }
+      ],
+      "options": { "tooltip": { "mode": "multi" }}
+    },
+    {
+      "id": 7, "title": "/predict latency — p50 / p95 / p99", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "palette-classic" }}},
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=\"fastapi\",handler=\"/predict\"}[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"fastapi\",handler=\"/predict\"}[5m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job=\"fastapi\",handler=\"/predict\"}[5m]))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 8, "title": "KS drift score per feature", "type": "bargauge",
+      "description": "KS statistic: 0=no drift, 1=max drift. Alert at > 0.3",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": {
+        "unit": "none", "decimals": 3, "min": 0, "max": 1,
+        "thresholds": { "mode": "absolute", "steps": [{"value":0,"color":"green"},{"value":0.2,"color":"yellow"},{"value":0.3,"color":"red"}] },
+        "color": { "mode": "thresholds" }
+      }},
+      "targets": [{ "expr": "mlops_drift_ks_statistic", "legendFormat": "{{feature}}" }],
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }}
+    },
+    {
+      "id": 9, "title": "Feature p-values over time (< 0.05 = drift)", "type": "timeseries",
+      "description": "Red zone below 0.05. Any feature crossing this line triggers a drift alert.",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": {
+        "unit": "none", "decimals": 4,
+        "color": { "mode": "palette-classic" },
+        "custom": { "thresholdsStyle": { "mode": "line" }},
+        "thresholds": { "mode": "absolute", "steps": [{"value":0,"color":"red"},{"value":0.05,"color":"green"}] }
+      }},
+      "targets": [{ "expr": "mlops_drift_pvalue", "legendFormat": "{{feature}}" }]
+    },
+    {
+      "id": 10, "title": "HTTP 5xx error rate", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 6 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": {"fixedColor":"red","mode":"fixed"}}},
+      "targets": [{ "expr": "rate(http_requests_total{job=\"fastapi\",status_code=~\"5..\"}[1m])", "legendFormat": "5xx/s" }]
+    },
+    {
+      "id": 11, "title": "Inflight requests", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 6 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": {"fixedColor":"blue","mode":"fixed"}}},
+      "targets": [{ "expr": "http_requests_in_progress{job=\"fastapi\"}", "legendFormat": "{{handler}}" }]
+    },
+    {
+      "id": 12, "title": "ML exporter scrape duration", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 26, "w": 12, "h": 5 },
+      "fieldConfig": { "defaults": { "unit": "s", "color": {"fixedColor":"purple","mode":"fixed"}}},
+      "targets": [{ "expr": "mlops_scrape_duration_seconds", "legendFormat": "duration" }]
+    },
+    {
+      "id": 13, "title": "Scrape errors (last 1h)", "type": "stat",
+      "gridPos": { "x": 12, "y": 26, "w": 12, "h": 5 },
+      "fieldConfig": { "defaults": {
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{"value":0,"color":"green"},{"value":1,"color":"red"}] }
+      }},
+      "targets": [{ "expr": "increase(mlops_scrape_errors_total[1h])", "legendFormat": "{{component}}" }]
+    }
+  ]
+}

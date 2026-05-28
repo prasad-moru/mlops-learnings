@@ -53,3 +53,44 @@ sudo systemctl daemon-reload
 sudo systemctl start grafana.service
 
 # Access: http://localhost:3000
+
+
+sudo tee /etc/grafana/provisioning/datasources/prometheus.yml > /dev/null << 'EOF'
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: "POST"
+EOF
+
+
+
+sudo tee /etc/grafana/provisioning/dashboards/mlops.yml > /dev/null << 'EOF'
+apiVersion: 1
+
+providers:
+  - name: MLOps
+    orgId: 1
+    folder: MLOps
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+EOF
+
+
+sudo chown root:grafana /etc/grafana/provisioning/datasources/prometheus.yml
+sudo chown root:grafana /etc/grafana/provisioning/dashboards/mlops.yml
+sudo chmod 640 /etc/grafana/provisioning/datasources/prometheus.yaml
+sudo chmod 640 /etc/grafana/provisioning/dashboards/mlops.yml
+sudo mkdir -p /var/lib/grafana/dashboards
+sudo chown -R grafana:grafana /var/lib/grafana/dashboards
