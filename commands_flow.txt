@@ -63,3 +63,33 @@ while True:
     print(r.json()['class_name'], end=' ', flush=True)
     time.sleep(1)
 "
+
+
+
+
+# Check the latest run has dataset inputs logged
+python3 -c "
+import mlflow
+from mlflow.tracking import MlflowClient
+
+mlflow.set_tracking_uri('http://localhost:5000')
+client = MlflowClient()
+
+# Get latest run
+exp = client.get_experiment_by_name('iris_classification')
+runs = mlflow.search_runs(
+    experiment_ids=[exp.experiment_id],
+    order_by=['start_time DESC'],
+    max_results=1
+)
+run_id = runs.iloc[0]['run_id']
+
+# Get datasets logged to that run
+datasets = client.get_run(run_id).inputs.dataset_inputs
+for d in datasets:
+    print(f'Dataset : {d.dataset.name}')
+    print(f'Context : {d.context}')
+    print(f'Source  : {d.dataset.source}')
+    print(f'Schema  : {d.dataset.schema}')
+    print()
+"

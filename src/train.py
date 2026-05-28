@@ -21,6 +21,7 @@ import mlflow
 import mlflow.sklearn
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
+from data_versioning import log_train_test_datasets
 from sklearn.metrics import (
     accuracy_score, f1_score, precision_score, recall_score,
     confusion_matrix, classification_report, roc_auc_score
@@ -36,6 +37,7 @@ import seaborn as sns
 from datetime import datetime
 import logging
 from pathlib import Path
+
 
 # ── Logging setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -246,6 +248,8 @@ def main():
             }
             mlflow.log_params(params)
             mlflow.log_dict(data_stats, "data_statistics.json")
+
+            log_train_test_datasets(X_train, X_test, y_train, y_test)
 
             # Step 4 ── Train
             model = train_model(X_train, y_train,
