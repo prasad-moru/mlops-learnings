@@ -75,7 +75,6 @@ from mlflow.tracking import MlflowClient
 mlflow.set_tracking_uri('http://localhost:5000')
 client = MlflowClient()
 
-# Get latest run
 exp = client.get_experiment_by_name('iris_classification')
 runs = mlflow.search_runs(
     experiment_ids=[exp.experiment_id],
@@ -84,12 +83,12 @@ runs = mlflow.search_runs(
 )
 run_id = runs.iloc[0]['run_id']
 
-# Get datasets logged to that run
 datasets = client.get_run(run_id).inputs.dataset_inputs
 for d in datasets:
     print(f'Dataset : {d.dataset.name}')
-    print(f'Context : {d.context}')
     print(f'Source  : {d.dataset.source}')
     print(f'Schema  : {d.dataset.schema}')
+    print(f'Digest  : {d.dataset.digest}')
+    print(f'Tags    : {d.tags}')
     print()
 "
