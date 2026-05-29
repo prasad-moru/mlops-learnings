@@ -1,0 +1,74 @@
+# ═══════════════════════════════════════════════════════════════════
+#  Dockerfile.metrics — ML Metrics Prometheus Exporter
+#  Scrapes MLflow registry + runs KS drift detection.
+#  Exposes /metrics on port 8001 for Prometheus to scrape.
+#  Build : docker build -f Dockerfile.metrics -t mlops-metrics:v1 .
+#  Run   : docker run --rm -p 8001:8001 --env-file .env mlops-metrics:v1
+#  Test  : curl http://localhost:8001/metrics
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Stage 1: dependency installer ────────────────────────────────
+FROM python:3.12-slim AS deps
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --timeout=300 --retries=5 -r requirements.txt
+
+
+# ── Stage 2: runtime image ────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=deps /usr/local/bin /usr/local/bin
+
+# metrics_server.py only needs src/ — no config needed
+COPY src/ src/
+
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# ── Runtime defaults ──────────────────────────────────────────────
+# In Docker Compose these are overridden:
+#   MLFLOW_TRACKING_URI → http://mlflow:5000
+#   API_URI             → http://fastapi:8000
+ENV MLFLOW_TRACKING_URI=http://localhost:5000 \
+    API_URI=http://localhost:8000 \
+    MODEL_NAME=iris_classifier \
+    MODEL_ALIAS=champion \
+    METRICS_PORT=8001 \
+    METRICS_INTERVAL=60 \
+    DRIFT_THRESHOLD=0.05
+
+EXPOSE 8001
+
+# ── Health check ──────────────────────────────────────────────────
+# Prometheus /metrics endpoint doubles as health indicator.
+# Longer interval (60s) because this scraper runs on 60s cycles.
+HEALTHCHECK \
+    --interval=60s \
+    --timeout=10s \
+    --start-period=60s \
+    --retries=3 \
+    CMD curl -f http://localhost:8001/metrics || exit 1
+
+# ── Start command ─────────────────────────────────────────────────
+CMD ["python", "src/metrics_server.py", \
+     "--port", "8001", \
+     "--interval", "60"]

@@ -1,0 +1,66 @@
+# Python runtime artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment — never include (800MB+)
+venv/
+env/
+.venv/
+
+# Secrets — NEVER in image
+.env
+
+# MLflow data — lives in MLflow container, not here
+mlruns/
+mlartifacts/
+artifacts/
+
+# Logs and PIDs
+logs/
+*.log
+*.pid
+nohup.out
+
+# Test and dev tooling
+tests/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Documentation
+setup-guides/
+docs/
+*.md
+
+# Text files — exclude all EXCEPT requirements.txt
+*.txt
+!requirements.txt
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Docker files themselves
+docker/
+docker-compose*.yml
+.dockerignore
+
+# Data files
+data/
+*.csv
+*.pkl
+*.parquet

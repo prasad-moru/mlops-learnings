@@ -1,0 +1,26 @@
+# monitoring/grafana/provisioning/datasources/prometheus.docker.yml
+#
+# Grafana datasource config for Docker Compose.
+# Uses 'prometheus' service name instead of localhost.
+#
+# WHY a separate file from prometheus.yml:
+#   Local Grafana (systemd):  url: http://localhost:9090
+#   Docker Grafana container: url: http://prometheus:9090
+#   Inside a container, localhost is the Grafana container itself.
+#
+# docker-compose.yml mounts THIS file to:
+#   /etc/grafana/provisioning/datasources/prometheus.yml
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus-mlops
+    access: proxy
+    url: http://prometheus:9090      # ← service name, not localhost
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: "POST"

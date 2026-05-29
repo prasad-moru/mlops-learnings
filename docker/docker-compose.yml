@@ -1,0 +1,167 @@
+version: '3.8'
+
+# ═══════════════════════════════════════════════════════════════════
+#  docker-compose.yml — Full MLOps Stack (Phase 1 complete)
+#
+#  Run:  docker compose up -d
+#  Stop: docker compose down
+#  Logs: docker compose logs -f fastapi
+#
+#  Services (startup order):
+#    1. db         → PostgreSQL 14              :5432
+#    2. mlflow     → MLflow tracking server     :5000
+#    3. fastapi    → FastAPI prediction API     :8000  ← NEW
+#    4. metrics    → ML metrics exporter        :8001  ← NEW
+#    5. prometheus → Prometheus scraper         :9090
+#    6. grafana    → Grafana dashboards         :3000
+#
+#  KEY NETWORKING CHANGE (localhost → service names):
+#    Local WSL:    MLFLOW_TRACKING_URI=http://localhost:5000
+#    In Docker:    MLFLOW_TRACKING_URI=http://mlflow:5000
+#    Inside a container, "localhost" is that container itself.
+#    Service names (mlflow, fastapi, db) are the correct hostnames.
+# ═══════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────
+  db:
+    image: postgres:14
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mlflow_user}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── MLflow tracking server ─────────────────────────────────────────
+  mlflow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "5000:5000"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:    postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}
+      PYTHONWARNINGS:  ${PYTHONWARNINGS:-ignore::UserWarning:pydantic}
+    volumes:
+      # Persistent artifact storage — model files survive container restarts
+      - mlflow_artifacts:/app/mlartifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 50s
+    restart: on-failure
+
+  # ── FastAPI prediction service ─────────────────────────────────────
+  # NEW in Phase 1. Replaces: uvicorn src.api:app running in WSL.
+  # Loads champion model from MLflow on startup, serves /predict.
+  fastapi:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    depends_on:
+      mlflow:
+        condition: service_healthy   # wait for MLflow before loading model
+    environment:
+      # Override localhost values from .env with Docker service names
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME:          ${MODEL_NAME:-iris_classifier}
+      MODEL_ALIAS:         ${MODEL_ALIAS:-champion}
+      API_HOST:            0.0.0.0
+      API_PORT:            "8000"
+      PYTHONWARNINGS:      ${PYTHONWARNINGS:-ignore::UserWarning:pydantic}
+    env_file:
+      - .env      # loads remaining vars (POSTGRES_*, DRIFT_THRESHOLD, etc.)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # ── ML metrics Prometheus exporter ────────────────────────────────
+  # NEW in Phase 1. Replaces: python src/metrics_server.py running in WSL.
+  # Pings FastAPI + MLflow, runs KS drift detection, exposes /metrics.
+  metrics:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.metrics
+    ports:
+      - "8001:8001"
+    depends_on:
+      fastapi:
+        condition: service_healthy   # wait for FastAPI to be ready
+      mlflow:
+        condition: service_healthy
+    environment:
+      # Override localhost values with Docker service names
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      API_URI:             http://fastapi:8000
+      MODEL_NAME:          ${MODEL_NAME:-iris_classifier}
+      MODEL_ALIAS:         ${MODEL_ALIAS:-champion}
+      METRICS_PORT:        "8001"
+      METRICS_INTERVAL:    "60"
+      DRIFT_THRESHOLD:     ${DRIFT_THRESHOLD:-0.05}
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  # ── Prometheus ─────────────────────────────────────────────────────
+  # Uses prometheus.docker.yml (service names) not prometheus.yml (localhost)
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      # Mount Docker-specific config that uses service names, not localhost
+      - ../monitoring/prometheus.docker.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    restart: unless-stopped
+
+  # ── Grafana ────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER:     admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/mlops.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Mount Docker-specific datasource config (prometheus:9090 not localhost)
+      - ../monitoring/grafana/provisioning/datasources/prometheus.docker.ds.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ../monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../monitoring/grafana/provisioning/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  mlflow_artifacts:     # persistent model artifact storage for MLflow container

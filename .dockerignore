@@ -1,0 +1,79 @@
+# ═══════════════════════════════════════════════════════════════════
+#  .dockerignore
+#  Excludes files from the Docker build context.
+#
+#  WHY this matters:
+#    Docker sends ALL files in the build directory to the daemon
+#    before building. Without .dockerignore, it sends venv/ (~800MB),
+#    mlruns/ (all your experiments), and .env (your secrets).
+#    With this file, the build context shrinks to ~50KB.
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Python runtime artifacts ──────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environment ───────────────────────────────────────────
+# Never include — 800MB+ of compiled packages for the wrong platform
+venv/
+env/
+.venv/
+
+# ── Secrets — NEVER in image ─────────────────────────────────────
+# .env has database passwords, API keys, credentials
+.env
+
+# ── MLflow data ───────────────────────────────────────────────────
+# These live in the MLflow container, not in the API/metrics images
+mlruns/
+mlartifacts/
+artifacts/
+
+# ── Logs and PIDs ─────────────────────────────────────────────────
+logs/
+*.log
+*.pid
+nohup.out
+
+# ── Test and dev tooling ──────────────────────────────────────────
+# Not needed at runtime — reduces image size
+tests/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── Documentation and setup guides ───────────────────────────────
+setup-guides/
+docs/
+*.md
+
+
+# ── IDE and OS files ──────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Git ───────────────────────────────────────────────────────────
+.git/
+.gitignore
+.github/
+
+# ── Docker files themselves ───────────────────────────────────────
+# Avoid recursive inclusion
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# ── Data files ────────────────────────────────────────────────────
+data/
+*.csv
+*.pkl
+*.parquet

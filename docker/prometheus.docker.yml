@@ -1,0 +1,40 @@
+# monitoring/prometheus.docker.yml
+#
+# Prometheus config for Docker Compose.
+# Uses Docker service names as targets (fastapi, metrics, prometheus).
+#
+# WHY a separate file from prometheus.yml:
+#   Local WSL:    targets: ['localhost:8000']  ← systemd Prometheus
+#   Docker:       targets: ['fastapi:8000']    ← containerised Prometheus
+#   Inside a container, 'localhost' is the Prometheus container itself.
+#   Service names resolve to the correct container IPs via Docker DNS.
+#
+# docker-compose.yml mounts THIS file (not prometheus.yml) to the
+# Prometheus container at /etc/prometheus/prometheus.yml.
+
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  scrape_timeout:      10s
+
+scrape_configs:
+
+  # FastAPI /metrics — auto-instrumented by prometheus_fastapi_instrumentator
+  # Service name 'fastapi' resolves inside the Docker network
+  - job_name: 'fastapi'
+    static_configs:
+      - targets: ['fastapi:8000']     # ← service name, not localhost
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # ML metrics exporter — drift scores, model accuracy, version, health
+  - job_name: 'ml-metrics'
+    static_configs:
+      - targets: ['metrics:8001']     # ← service name, not localhost
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['prometheus:9090']  # ← service name, not localhost

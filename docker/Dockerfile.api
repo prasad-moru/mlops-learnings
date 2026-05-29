@@ -1,0 +1,89 @@
+# ═══════════════════════════════════════════════════════════════════
+#  Dockerfile.api — FastAPI Prediction Service
+#  Serves the iris classifier via HTTP.
+#  Build : docker build -f Dockerfile.api -t mlops-api:v1 .
+#  Run   : docker run --rm -p 8000:8000 --env-file .env mlops-api:v1
+#  Test  : curl http://localhost:8000/health
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Stage 1: dependency installer ────────────────────────────────
+# Use a separate stage so the requirements layer is cached.
+# If requirements.txt does not change, pip install is skipped on rebuild.
+FROM python:3.12-slim AS deps
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --timeout=300 --retries=5 -r requirements.txt
+
+
+# ── Stage 2: runtime image ────────────────────────────────────────
+# Copy only installed packages + source code — no build tools in final image.
+# Smaller image, smaller attack surface.
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+# Runtime system dependencies only (libpq for psycopg2, curl for healthcheck)
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages from the deps stage
+COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=deps /usr/local/bin /usr/local/bin
+
+# Copy application source code
+# Only src/ and config/ — NOT .env (secrets never go into the image)
+COPY src/     src/
+COPY config/  config/
+
+# ── Security: run as non-root user ────────────────────────────────
+# WHY: containers that run as root can escape to the host if compromised.
+# Production containers always run as non-root.
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+# ── Environment ───────────────────────────────────────────────────
+# PYTHONPATH: lets Python find src/ modules from the /app working directory
+# PYTHONUNBUFFERED: logs appear immediately (not buffered) — critical for Docker logs
+# PYTHONDONTWRITEBYTECODE: don't create .pyc files in the container
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# ── Runtime defaults (overridden by --env-file or docker-compose) ─
+# These are the local defaults. In Docker Compose, MLFLOW_TRACKING_URI
+# is overridden to http://mlflow:5000 (the service name, not localhost).
+ENV MLFLOW_TRACKING_URI=http://localhost:5000 \
+    MODEL_NAME=iris_classifier \
+    MODEL_ALIAS=champion \
+    API_HOST=0.0.0.0 \
+    API_PORT=8000
+
+EXPOSE 8000
+
+# ── Health check ──────────────────────────────────────────────────
+# Docker daemon pings /health every 30s.
+# Kubernetes uses this for liveness + readiness probes.
+# start-period=40s gives MLflow time to start before API is expected healthy.
+HEALTHCHECK \
+    --interval=30s \
+    --timeout=10s \
+    --start-period=40s \
+    --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# ── Start command ─────────────────────────────────────────────────
+# Array form (exec form) — no shell wrapper, signals reach uvicorn directly.
+# This means Ctrl+C / docker stop work cleanly.
+CMD ["uvicorn", "src.api:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "2"]
