@@ -17,6 +17,21 @@ pytest scripts/smoke_test_mlflow.py -v -m integration  # needs live MLflow
 
 
 
+Check the database first:
+cd ~/mlops-learnings/docker
+docker compose exec db psql -U mlflow_user -d mlflow_db \
+  -c "SELECT experiment_id, name, artifact_location FROM experiments ORDER BY experiment_id;"
+
+Fix — update all experiments to use the proxy URI:
+
+docker compose exec db psql -U mlflow_user -d mlflow_db -c "
+UPDATE experiments
+SET artifact_location = 'mlflow-artifacts:/' || experiment_id
+WHERE artifact_location NOT LIKE 'mlflow-artifacts:%';
+SELECT experiment_id, name, artifact_location FROM experiments ORDER BY experiment_id;
+"
+
+
 
 # Send 50 requests — populates the request rate and latency panels
 python3 -c "
@@ -64,7 +79,41 @@ while True:
     time.sleep(1)
 "
 
+================================================================================================
 
+for container application trafffice generate
+
+python3 -c "
+import requests, time, random
+
+url = 'http://localhost:8000/predict'
+samples = [
+  {'sepal_length':5.1,'sepal_width':3.5,'petal_length':1.4,'petal_width':0.2},
+  {'sepal_length':6.0,'sepal_width':2.7,'petal_length':5.1,'petal_width':1.6},
+  {'sepal_length':6.9,'sepal_width':3.1,'petal_length':5.4,'petal_width':2.1},
+]
+
+print('Sending requests to', url)
+count = 0
+while True:
+    try:
+        r = requests.post(url, json=random.choice(samples))
+        if r.status_code == 200:
+            count += 1
+            print(r.json()['class_name'], end=' ', flush=True)
+            if count % 20 == 0:
+                print(f'  [{count} requests]')
+        else:
+            print(f'ERROR {r.status_code}: {r.json()}')
+            break
+    except Exception as e:
+        print(f'Connection error: {e}')
+        break
+    time.sleep(1)
+"
+
+
+=============================================================================
 
 
 # Check the latest run has dataset inputs logged
