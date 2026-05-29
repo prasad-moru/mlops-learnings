@@ -5,6 +5,13 @@ name: MLOps Pipeline
 # Humans only intervene when something fails.
 # "If it's not tested, it's broken" — CI enforces this.
 
+# BUG FIX (Bug 2):
+#   The train job was using python-version: '3.9' while the test job
+#   used '3.12'. This caused a version mismatch — tests passed on 3.12
+#   but the model was trained on 3.9. A dependency working on 3.12 could
+#   silently fail on 3.9 in production.
+#   Fix: both jobs now use python-version: '3.12'.
+
 on:
   workflow_dispatch: {}
   # push:
@@ -29,7 +36,7 @@ jobs:
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12'           # unchanged — was already correct
 
       - name: Cache pip dependencies
         uses: actions/cache@v3
@@ -59,12 +66,12 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.9
-        uses: actions/setup-python@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.12'           # ← FIX: was '3.9', now matches test job
 
       - name: Install dependencies
         run: pip install -r requirements.txt

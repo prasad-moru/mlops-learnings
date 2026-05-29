@@ -11,11 +11,19 @@ NEW: /metrics endpoint auto-exposed by prometheus_fastapi_instrumentator
 
 Test with:
   uvicorn src.api:app --reload --port 8000
-  curl http://localhost:8000/metrics   ← NEW: Prometheus metrics
+  curl http://localhost:8000/metrics   ← Prometheus metrics
   curl http://localhost:8000/health
   curl -X POST http://localhost:8000/predict \
        -H "Content-Type: application/json" \
        -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
+
+BUG FIX (Bug 1):
+  PredictionResponse and HealthResponse were missing
+  model_config = {"protected_namespaces": ()}
+  This caused Pydantic v2 UserWarning on every API startup because
+  fields named model_name / model_uri / model_alias start with "model_",
+  which Pydantic v2 reserves as a protected namespace by default.
+  Fix: add model_config to both response models (same as IrisFeatures).
 """
 
 from contextlib import asynccontextmanager
@@ -68,10 +76,6 @@ app = FastAPI(
 )
 
 # ── Prometheus instrumentation ────────────────────────────────────────────────
-# WHY: One line wires up /metrics with zero manual metric code.
-#      Auto-tracks: http_requests_total, http_request_duration_seconds,
-#      http_requests_in_progress — all labelled by endpoint + status code.
-# DOES NOT instrument /health or /metrics itself (excluded_handlers).
 Instrumentator(
     should_group_status_codes=True,
     should_ignore_untemplated=True,
@@ -89,6 +93,7 @@ class IrisFeatures(BaseModel):
     petal_width:  float = Field(..., gt=0, description="Petal width in cm")
 
     model_config = {
+        "protected_namespaces": (),
         "json_schema_extra": {
             "example": {
                 "sepal_length": 5.1,
@@ -100,7 +105,11 @@ class IrisFeatures(BaseModel):
     }
 
 
+# ── BUG FIX: added model_config to suppress Pydantic v2 protected namespace
+#    warning for fields starting with "model_" (model_name, model_alias, model_uri)
 class PredictionResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}   # ← FIX
+
     prediction:  int
     class_name:  str
     confidence:  float
@@ -109,7 +118,11 @@ class PredictionResponse(BaseModel):
     timestamp:   str
 
 
+# ── BUG FIX: added model_config to suppress Pydantic v2 protected namespace
+#    warning for model_uri field
 class HealthResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}   # ← FIX
+
     status:       str
     model_loaded: bool
     model_uri:    str

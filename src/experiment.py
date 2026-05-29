@@ -6,6 +6,15 @@ HOW  : Loops over param combos, logs each as a separate MLflow run
 WHEN : Initial model development or periodic re-evaluation
 WHERE: Dev laptop, CI/CD, cloud VM
 WHAT : Trains N models, logs all results, prints ranked summary
+
+BUG FIX (Bug 4):
+  log_train_test_datasets() was never called in this script.
+  All 5 experiment runs had no dataset lineage in MLflow — only
+  train.py had data versioning wired in.
+  Fix: import log_train_test_datasets from data_versioning and call
+  it inside each run block after log_params(), exactly as train.py does.
+  Now every run in iris_classification has a dataset digest so you can
+  trace which data produced which model across ALL experiments.
 """
 
 import mlflow
@@ -13,6 +22,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from train import load_data, train_model, evaluate_model
+from data_versioning import log_train_test_datasets   # ← FIX: import added
 from dotenv import load_dotenv
 from datetime import datetime
 import pandas as pd
@@ -59,6 +69,12 @@ def run_experiment():
                 "batch"  : datetime.now().strftime('%Y%m%d'),
                 "purpose": "hyperparameter_comparison"
             })
+
+            # ── BUG FIX: log dataset inputs for every experiment run ──────────
+            # Previously missing — only train.py had data versioning.
+            # Now every run in this experiment records the data digest,
+            # schema, and source so you can trace data lineage across all runs.
+            log_train_test_datasets(X_train, X_test, y_train, y_test)  # ← FIX
 
             model = train_model(X_train, y_train,
                                 n_estimators=cfg['n_estimators'],
