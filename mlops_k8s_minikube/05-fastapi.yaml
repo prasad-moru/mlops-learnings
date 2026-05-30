@@ -1,0 +1,149 @@
+# ── FastAPI — Deployment ──────────────────────────────────────────────────────
+# Serves the champion model via HTTP.
+# Loads model from MLflow registry at startup using the service name.
+# Scaled by HPA (Horizontal Pod Autoscaler) based on CPU.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi
+  namespace: mlops
+  labels:
+    app: fastapi
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  replicas: 2           # start with 2 replicas — HPA adjusts from here
+  selector:
+    matchLabels:
+      app: fastapi
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1  # always keep 1 replica serving during updates
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: fastapi
+      annotations:
+        # Tell Prometheus to scrape this pod directly (optional — already via service)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      initContainers:
+        # Wait for MLflow to be healthy before loading the model
+        - name: wait-for-mlflow
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://mlflow:5000/health; do
+                echo "Waiting for MLflow..."
+                sleep 3
+              done
+              echo "MLflow ready"
+      containers:
+        - name: fastapi
+          image: prasad890/docker-fastapi:latest
+          imagePullPolicy: Always 
+          ports:
+            - containerPort: 8000
+          env:
+            # Override default localhost with K8s service name
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: MLFLOW_TRACKING_URI
+            - name: MODEL_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: MODEL_NAME
+            - name: MODEL_ALIAS
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: MODEL_ALIAS
+            - name: PYTHONWARNINGS
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: PYTHONWARNINGS
+            - name: PYTHONPATH
+              value: "/app"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+# ── FastAPI — HPA ─────────────────────────────────────────────────────────────
+# Horizontal Pod Autoscaler: scales FastAPI pods based on CPU usage.
+# WHY HPA for prediction API:
+#   Traffic is bursty — low at night, high during business hours.
+#   HPA scales from 2 to 5 pods based on CPU, saving resources when idle.
+# REQUIRES: metrics-server addon in Minikube
+#   Enable with: minikube addons enable metrics-server
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: fastapi-hpa
+  namespace: mlops
+  labels:
+    app: fastapi
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: fastapi
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70    # scale up when avg CPU > 70%
+---
+# ── FastAPI Service ───────────────────────────────────────────────────────────
+# NodePort: accessible from outside for testing and Postman.
+# ClusterIP port 8000 used by metrics pod internally.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi
+  namespace: mlops
+  labels:
+    app: fastapi
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  selector:
+    app: fastapi
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      nodePort: 30800     # access via: http://$(minikube ip):30800
+  type: NodePort

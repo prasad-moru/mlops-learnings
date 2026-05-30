@@ -1,0 +1,124 @@
+# ── ML Metrics Exporter — Deployment ─────────────────────────────────────────
+# Scrapes MLflow for model metrics (accuracy, drift, prediction counts)
+# and exposes them as Prometheus /metrics endpoint.
+# Polls FastAPI /predict and MLflow runs on a schedule (METRICS_INTERVAL=60s).
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics
+  namespace: mlops
+  labels:
+    app: metrics
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics
+  template:
+    metadata:
+      labels:
+        app: metrics
+    spec:
+      initContainers:
+        # Wait for FastAPI before starting — metrics exporter calls /predict
+        - name: wait-for-fastapi
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://fastapi:8000/health; do
+                echo "Waiting for FastAPI..."
+                sleep 5
+              done
+              echo "FastAPI ready"
+      containers:
+        - name: metrics
+          image: prasad890/docker-metrics:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+          env:
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: MLFLOW_TRACKING_URI
+            - name: API_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: API_URI
+            - name: METRICS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: METRICS_PORT
+            - name: METRICS_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: METRICS_INTERVAL
+            - name: MODEL_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: MODEL_NAME
+            - name: MODEL_ALIAS
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: MODEL_ALIAS
+            - name: EXPERIMENT_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: EXPERIMENT_NAME
+            - name: PYTHONWARNINGS
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: PYTHONWARNINGS
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 8001
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+---
+# ── ML Metrics Exporter Service ───────────────────────────────────────────────
+# ClusterIP only — Prometheus scrapes this from inside the cluster.
+# No external access needed.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics
+  namespace: mlops
+  labels:
+    app: metrics
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  selector:
+    app: metrics
+  ports:
+    - name: metrics
+      port: 8001
+      targetPort: 8001
+  type: ClusterIP

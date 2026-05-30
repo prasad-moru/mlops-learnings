@@ -1,0 +1,126 @@
+# ── PostgreSQL — StatefulSet ──────────────────────────────────────────────────
+# WHY StatefulSet not Deployment:
+#   Deployments are for stateless services — pods are interchangeable.
+#   StatefulSets are for stateful services — each pod has a stable identity
+#   and its own persistent volume. Postgres loses all data if its PVC is
+#   deleted, so a stable pod identity matters here.
+#
+# WHY PersistentVolumeClaim:
+#   Docker volume: data lives inside Docker, lost if volume deleted.
+#   K8s PVC: data persists independently of the pod lifecycle.
+#   Minikube provides a 'standard' storage class backed by hostPath.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: mlops
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  accessModes:
+    - ReadWriteOnce      # one pod at a time — correct for single-instance Postgres
+  storageClassName: standard  # Minikube default storage class
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: mlops
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  serviceName: postgres   # headless service name for stable DNS
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:14
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-secrets
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-secrets
+                  key: POSTGRES_DB
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          # ── Health checks ──────────────────────────────────────────────────
+          # readinessProbe: only send traffic when postgres is actually ready
+          # livenessProbe: restart pod if postgres stops responding
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - mlflow_user
+                - -d
+                - mlflow_db
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - mlflow_user
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+# ── PostgreSQL Service ────────────────────────────────────────────────────────
+# ClusterIP: only accessible inside the cluster.
+# Other pods connect via: postgres.mlops.svc.cluster.local:5432
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: mlops
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP

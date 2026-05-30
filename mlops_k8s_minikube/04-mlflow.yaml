@@ -1,0 +1,159 @@
+# ── MLflow — PersistentVolumeClaim ────────────────────────────────────────────
+# Stores model artifacts uploaded through --serve-artifacts proxy.
+# Must persist across pod restarts — models are irreplaceable without retraining.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mlflow-artifacts-pvc
+  namespace: mlops
+  labels:
+    app: mlflow
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 10Gi
+---
+# ── MLflow — Deployment ───────────────────────────────────────────────────────
+# WHY Deployment not StatefulSet:
+#   MLflow server is stateless — its state is in PostgreSQL (runs/metrics)
+#   and the PVC (artifact files). The pod itself carries no state.
+#   Deployments can be scaled, rolled back, and updated with zero downtime.
+#
+# KEY flags:
+#   --serve-artifacts     → artifacts upload through HTTP, not local filesystem
+#   --artifacts-destination → where server stores uploaded artifacts inside PVC
+#   --allowed-hosts '*'   → allow connections from FastAPI + metrics pods
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: mlops
+  labels:
+    app: mlflow
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never take mlflow down during update
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: mlflow
+    spec:
+      initContainers:
+        # Wait for PostgreSQL to be ready before starting MLflow
+        # WHY initContainer: MLflow fails at startup if Postgres isn't ready.
+        # An initContainer retries until Postgres accepts connections,
+        # then the main container starts.
+        - name: wait-for-postgres
+          image: postgres:14
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -U mlflow_user -d mlflow_db; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
+              echo "PostgreSQL ready"
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-secrets
+                  key: POSTGRES_PASSWORD
+      containers:
+        - name: mlflow
+          # Use the image built by your docker/Dockerfile
+          # Load into Minikube with: minikube image load prasad890/docker-mlflow:latest
+          image: prasad890/docker-mlflow:latest
+          imagePullPolicy: Always 
+          ports:
+            - containerPort: 5000
+          command:
+            - sh
+            - -c
+            - |
+              python -m mlflow server \
+                --backend-store-uri ${DATABASE_URL} \
+                --artifacts-destination /mlartifacts \
+                --serve-artifacts \
+                --host 0.0.0.0 \
+                --port 5000 \
+                --allowed-hosts '*'
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-secrets
+                  key: DATABASE_URL
+            - name: PYTHONWARNINGS
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: PYTHONWARNINGS
+          volumeMounts:
+            - name: mlflow-artifacts
+              mountPath: /mlartifacts
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+      volumes:
+        - name: mlflow-artifacts
+          persistentVolumeClaim:
+            claimName: mlflow-artifacts-pvc
+---
+# ── MLflow Service ────────────────────────────────────────────────────────────
+# NodePort: accessible from outside the cluster via minikube ip + node port.
+# Used by: local train.py, local model_registry.py, FastAPI pod, metrics pod.
+# WHY NodePort for MLflow:
+#   During development you need to run train.py locally pointing at K8s MLflow.
+#   NodePort exposes the service on every node's IP at a static port.
+#   Access via: minikube service mlflow -n mlops --url
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  namespace: mlops
+  labels:
+    app: mlflow
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  selector:
+    app: mlflow
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      nodePort: 30500     # fixed port — access via: http://$(minikube ip):30500
+  type: NodePort

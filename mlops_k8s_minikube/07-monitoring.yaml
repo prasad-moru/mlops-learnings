@@ -1,0 +1,249 @@
+# ── Prometheus — PersistentVolumeClaim ───────────────────────────────────────
+# Stores scraped metrics — 15s intervals × many series = significant data.
+# Losing Prometheus PVC means losing historical metric graphs.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc
+  namespace: monitoring
+  labels:
+    app: prometheus
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 5Gi
+---
+# ── Prometheus — Deployment ───────────────────────────────────────────────────
+# Scrapes metrics from FastAPI and ML metrics exporter across namespaces.
+# Config is mounted from prometheus-config ConfigMap (02-configmap.yaml).
+# WHY monitoring namespace:
+#   Prometheus and Grafana are infrastructure tools, not ML services.
+#   Separate namespace allows different RBAC, resource quotas, and lifecycle.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      # Prometheus needs permission to write to its data directory
+      securityContext:
+        fsGroup: 65534        # nobody group — matches prometheus container user
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=15d"   # keep 15 days of metrics
+            - "--web.enable-lifecycle"               # allow POST /-/reload
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+            - name: prometheus-data
+              mountPath: /prometheus
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+        - name: prometheus-data
+          persistentVolumeClaim:
+            claimName: prometheus-pvc
+---
+# ── Prometheus Service ────────────────────────────────────────────────────────
+# NodePort: access Prometheus UI from browser during development.
+# Grafana uses ClusterIP DNS (http://prometheus:9090) internally.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+      nodePort: 30090     # access via: http://$(minikube ip):30090
+  type: NodePort
+---
+# ── Grafana — PersistentVolumeClaim ──────────────────────────────────────────
+# Stores dashboards created via UI, user preferences, alert rules.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: monitoring
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 2Gi
+---
+# ── Grafana — Deployment ──────────────────────────────────────────────────────
+# Auto-provisions Prometheus datasource and dashboard provider from ConfigMaps.
+# No manual setup needed — datasource and provider are applied at startup.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      securityContext:
+        fsGroup: 472          # grafana group — allows writing to /var/lib/grafana
+        runAsUser: 472
+      initContainers:
+        # Wait for Prometheus before Grafana starts its provisioning
+        - name: wait-for-prometheus
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://prometheus:9090/-/ready; do
+                echo "Waiting for Prometheus..."
+                sleep 3
+              done
+              echo "Prometheus ready"
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.4.2
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "admin"
+            - name: GF_PATHS_PROVISIONING
+              value: "/etc/grafana/provisioning"
+            # Disable login screen for development convenience
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Viewer"
+            - name: GF_SERVER_ROOT_URL
+              value: "http://localhost:30300"
+          volumeMounts:
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+            - name: grafana-datasource
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: grafana-dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "512Mi"
+      volumes:
+        - name: grafana-data
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+        - name: grafana-datasource
+          configMap:
+            name: grafana-datasource
+        - name: grafana-dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+---
+# ── Grafana Service ───────────────────────────────────────────────────────────
+# NodePort: access Grafana dashboards from browser.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: mlops-stack
+spec:
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      nodePort: 30300     # access via: http://$(minikube ip):30300
+  type: NodePort

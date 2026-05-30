@@ -1,0 +1,24 @@
+# ── Namespaces ────────────────────────────────────────────────────────────────
+# Two namespaces keep ML services and monitoring services isolated.
+# mlops      → PostgreSQL, MLflow, FastAPI, metrics exporter
+# monitoring → Prometheus, Grafana
+#
+# WHY separate namespaces:
+#   Network policies, RBAC, and resource quotas can be scoped per namespace.
+#   Monitoring tools can be upgraded or replaced without touching ML services.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mlops
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+    environment: development
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+    environment: development

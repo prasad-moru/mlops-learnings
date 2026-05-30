@@ -1,0 +1,22 @@
+# ── Kustomization ─────────────────────────────────────────────────────────────
+# Kustomize is built into kubectl — no extra tools needed.
+# Apply the entire stack in one command:
+#
+#   kubectl apply -k k8s/
+#
+# Resources are applied in the order listed here.
+# Kubernetes processes dependencies via readinessProbes and initContainers —
+# pods wait for each other rather than apply order controlling startup sequence.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - 01-secret.yaml
+  - 02-configmap.yaml
+  - 03-postgres.yaml
+  - 04-mlflow.yaml
+  - 05-fastapi.yaml
+  - 06-metrics.yaml
+  - 07-monitoring.yaml

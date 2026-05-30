@@ -1,0 +1,137 @@
+# ── ConfigMap ─────────────────────────────────────────────────────────────────
+# Non-secret configuration for all MLOps services.
+# WHY ConfigMap not Secret: these values are not sensitive.
+#   Secrets are base64-only and designed for credentials.
+#   ConfigMaps are plain text and easier to audit and update.
+#
+# KEY networking change from Docker Compose:
+#   Docker Compose:  http://mlflow:5000      (service name in compose network)
+#   Kubernetes:      http://mlflow.mlops.svc.cluster.local:5000
+#                 or http://mlflow:5000      (within same namespace — shorter)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlops-config
+  namespace: mlops
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+data:
+  # ── MLflow ──────────────────────────────────────────────────────────────────
+  # Within same namespace, short service name resolves via kube-dns
+  MLFLOW_TRACKING_URI: "http://mlflow:5000"
+  EXPERIMENT_NAME:     "iris_classification"
+  MODEL_NAME:          "iris_classifier"
+  MODEL_ALIAS:         "champion"
+
+  # ── Training ────────────────────────────────────────────────────────────────
+  RANDOM_SEED:         "42"
+  ENVIRONMENT:         "development"
+  MIN_ACCURACY:        "0.90"
+  DRIFT_THRESHOLD:     "0.05"
+
+  # ── API ─────────────────────────────────────────────────────────────────────
+  API_HOST:            "0.0.0.0"
+  API_PORT:            "8000"
+
+  # ── PostgreSQL (non-secret values) ──────────────────────────────────────────
+  POSTGRES_HOST:       "postgres"
+  POSTGRES_PORT:       "5432"
+
+  # ── Metrics exporter ────────────────────────────────────────────────────────
+  # Within the same namespace, fastapi service name resolves directly
+  API_URI:             "http://fastapi:8000"
+  METRICS_PORT:        "8001"
+  METRICS_INTERVAL:    "60"
+
+  # ── Python ──────────────────────────────────────────────────────────────────
+  PYTHONUNBUFFERED:    "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONWARNINGS:      "ignore::UserWarning:pydantic"
+---
+# ── Prometheus config ─────────────────────────────────────────────────────────
+# Separate ConfigMap for Prometheus scrape config.
+# Lives in monitoring namespace — references services in mlops namespace
+# using full DNS: <service>.<namespace>.svc.cluster.local
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+    app: prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval:     15s
+      evaluation_interval: 15s
+      scrape_timeout:      10s
+
+    scrape_configs:
+      # FastAPI /metrics — cross-namespace using full DNS
+      - job_name: 'fastapi'
+        static_configs:
+          - targets: ['fastapi.mlops.svc.cluster.local:8000']
+        metrics_path: '/metrics'
+        scrape_interval: 15s
+
+      # ML metrics exporter — cross-namespace using full DNS
+      - job_name: 'ml-metrics'
+        static_configs:
+          - targets: ['metrics.mlops.svc.cluster.local:8001']
+        metrics_path: '/metrics'
+        scrape_interval: 60s
+
+      # Prometheus self-monitoring
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+---
+# ── Grafana provisioning — datasource ─────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+    app: grafana
+data:
+  prometheus.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus-mlops
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: true
+        jsonData:
+          timeInterval: "15s"
+          httpMethod: "POST"
+---
+# ── Grafana provisioning — dashboard provider ─────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+    app: grafana
+data:
+  dashboard.yml: |
+    apiVersion: 1
+    providers:
+      - name: MLOps
+        orgId: 1
+        folder: MLOps
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
