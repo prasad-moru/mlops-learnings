@@ -1,0 +1,11 @@
+# cert-manager test — ClusterIssuer
+# ─────────────────────────────────────────────────
+# Applied during Step 1 to verify cert-manager webhook is functional.
+# If this applies without error, cert-manager is working correctly.
+# ─────────────────────────────────────────────────
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}

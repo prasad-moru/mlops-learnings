@@ -1,0 +1,126 @@
+# Phase 5 — Step 1: Install Airflow via Helm
+# ─────────────────────────────────────────────────
+# WHY LocalExecutor (not CeleryExecutor):
+#   CeleryExecutor needs Redis + multiple worker pods = 6+ extra pods.
+#   LocalExecutor runs tasks in the same pod as the scheduler.
+#   Perfect for development. Upgrade to KubernetesExecutor in production.
+#
+# WHY separate namespace (airflow):
+#   Airflow is infrastructure — not an ML service.
+#   Keeps it isolated from mlops and monitoring namespaces.
+#   Can be upgraded or removed without touching the ML stack.
+# ─────────────────────────────────────────────────
+
+
+# ── Add Apache Airflow Helm repo ──────────────────────────────────────────────
+helm repo add apache-airflow https://airflow.apache.org
+helm repo update
+
+
+# Verify repo added
+helm repo list
+# Expected:
+#   NAME            URL
+#   apache-airflow  https://airflow.apache.org
+
+
+# ── Create airflow namespace ──────────────────────────────────────────────────
+kubectl create namespace airflow
+
+
+# ── Install Airflow ───────────────────────────────────────────────────────────
+# Uses airflow-values.yaml for all configuration
+# Takes 3-5 minutes — Helm pulls images and waits for pods to be ready
+helm install airflow apache-airflow/airflow \
+  --namespace airflow \
+  --version 1.11.0 \
+  --values /home/devops/mlops-learnings/mlops_k8s_kserv_arflow/airflow-values.yaml \
+  --set "webserver.defaultUser.enabled=true" \
+  --set "webserver.defaultUser.role=Admin" \
+  --set "webserver.defaultUser.username=admin" \
+  --set "webserver.defaultUser.password=admin" \
+  --set "webserver.defaultUser.email=admin@example.com" \
+  --set "webserver.defaultUser.firstName=Admin" \
+  --set "webserver.defaultUser.lastName=User" \
+  --timeout 10m \
+  --wait
+
+
+helm upgrade airflow apache-airflow/airflow \
+  --namespace airflow \
+  --version 1.11.0 \
+  --values /home/devops/mlops-learnings/mlops_k8s_kserv_arflow/airflow-values.yaml \
+  --set "webserver.defaultUser.enabled=true" \
+  --set "webserver.defaultUser.role=Admin" \
+  --set "webserver.defaultUser.username=admin" \
+  --set "webserver.defaultUser.password=admin" \
+  --set "webserver.defaultUser.email=admin@example.com" \
+  --set "webserver.defaultUser.firstName=Admin" \
+  --set "webserver.defaultUser.lastName=User"
+
+
+
+
+devops@cznadmin:~/mlops-learnings/mlops_k8s_kserv_arflow$ helm install airflow apache-airflow/airflow \
+  --namespace airflow \
+  --version 1.11.0 \
+  --values /home/devops/mlops-learnings/mlops_k8s_kserv_arflow/airflow-values.yaml \
+  --set "webserver.defaultUser.enabled=true" \
+  --set "webserver.defaultUser.role=Admin" \
+  --set "webserver.defaultUser.username=admin" \
+  --set "webserver.defaultUser.password=admin" \
+  --set "webserver.defaultUser.email=admin@example.com" \
+  --set "webserver.defaultUser.firstName=Admin" \
+  --set "webserver.defaultUser.lastName=User"
+NAME: airflow
+LAST DEPLOYED: Tue Jun  2 10:18:48 2026
+NAMESPACE: airflow
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+NOTES:
+Thank you for installing Apache Airflow 2.7.1!
+
+Your release is named airflow.
+You can now access your dashboard(s) by executing the following command(s) and visiting the corresponding port at localhost in your browser:
+
+Airflow Webserver:     kubectl port-forward svc/airflow-webserver 8080:8080 --namespace airflow
+Default Webserver (Airflow UI) Login credentials:
+    username: admin
+    password: admin
+
+You can get Fernet Key value by running the following:
+
+    echo Fernet Key: $(kubectl get secret --namespace airflow airflow-fernet-key -o jsonpath="{.data.fernet-key}" | base64 --decode)
+
+###########################################################
+#  WARNING: You should set a static webserver secret key  #
+###########################################################
+
+You are using a dynamically generated webserver secret key, which can lead to
+unnecessary restarts of your Airflow components.
+
+Information on how to set a static webserver secret key can be found here:
+https://airflow.apache.org/docs/helm-chart/stable/production-guide.html#webserver-secret-key
+
+# Verify all Airflow pods are running
+kubectl get pods -n airflow
+# Expected:
+#   NAME                                  READY   STATUS
+#   airflow-scheduler-xxx                 2/2     Running
+#   airflow-webserver-xxx                 1/1     Running
+#   airflow-postgresql-0                  1/1     Running
+#   airflow-statsd-xxx                    1/1     Running
+#   airflow-triggerer-xxx                 1/1     Running
+
+
+# Access the Airflow UI
+# NodePort 30808 configured in airflow-values.yaml
+echo "Airflow UI: http://$(minikube ip):30808"
+echo "Login: admin / admin"
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 02-configure-rbac.txt
+# ─────────────────────────────────────────────────

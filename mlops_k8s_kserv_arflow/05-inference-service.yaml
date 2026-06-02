@@ -1,0 +1,98 @@
+# ── KServe InferenceService ───────────────────────────────────────────────────
+# Replaces k8s/05-fastapi.yaml entirely.
+#
+# BEFORE (Phase 3 — 3 separate objects):
+#   Deployment   → manages pods
+#   HPA          → scales pods
+#   Service      → exposes pods
+#
+# AFTER (Phase 4 — 1 object):
+#   InferenceService → KServe creates Knative Service + Istio VirtualService
+#                      automatically. Scaling, routing, revisions all managed.
+#
+# HOW scale-to-zero works:
+#   No requests for 60s → Knative scales pods to 0.
+#   Next request arrives → Knative starts a pod (cold start ~15s).
+#   minReplicas: 1 disables scale-to-zero (always 1 pod running).
+#
+# HOW canary works:
+#   Uncomment canaryTrafficPercent: 20 and reapply with updated image/config.
+#   KServe creates revision-2 and sends 20% of traffic to it.
+#   Promote: remove canaryTrafficPercent and reapply → 100% to new revision.
+#   Rollback: kubectl rollout undo → traffic returns to previous revision.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: iris-classifier
+  namespace: mlops
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+  annotations:
+    serving.kserve.io/deploymentMode: Serverless
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  predictor:
+    # ── Scaling ───────────────────────────────────────────────────────────────
+    minReplicas: 0          # 0 = scale to zero when idle
+    maxReplicas: 5
+    scaleTarget: 2          # scale up when concurrent requests per pod > 2
+    scaleMetric: concurrency
+
+    # ── Canary (uncomment to split traffic during new model rollout) ──────────
+    # canaryTrafficPercent: 20
+    # 80% → current revision, 20% → new revision
+    # Remove this line and reapply to promote new revision to 100%
+
+    # ── Container ─────────────────────────────────────────────────────────────
+    # Using our custom FastAPI image — loads model from MLflow registry.
+    # WHY not built-in KServe sklearn predictor:
+    #   Built-in predictors pull models from S3/GCS/MinIO.
+    #   Our models are in an MLflow PVC. Custom container loads from MLflow.
+    containers:
+      - name: kserve-container
+        image: prasad890/docker-fastapi:latest
+        imagePullPolicy: Never
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlops.svc.cluster.local:5000"
+          - name: MODEL_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: mlops-config
+                key: MODEL_NAME
+          - name: MODEL_ALIAS
+            valueFrom:
+              configMapKeyRef:
+                name: mlops-config
+                key: MODEL_ALIAS
+          - name: PYTHONWARNINGS
+            valueFrom:
+              configMapKeyRef:
+                name: mlops-config
+                key: PYTHONWARNINGS
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"

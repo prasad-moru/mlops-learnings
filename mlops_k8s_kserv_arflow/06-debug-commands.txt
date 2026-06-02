@@ -1,0 +1,98 @@
+# Phase 4 — Debug Commands Reference
+# ─────────────────────────────────────────────────
+# Use these when pods are stuck, InferenceService not ready,
+# or predictions returning errors.
+# ─────────────────────────────────────────────────
+
+
+# ── cert-manager ─────────────────────────────────────────────────────────────
+
+# Check cert-manager pods
+kubectl get pods -n cert-manager
+
+# Check webhook certificates
+kubectl get certificate -A
+
+# Describe a failing certificate
+kubectl describe certificate <name> -n cert-manager
+
+
+# ── Istio ─────────────────────────────────────────────────────────────────────
+
+# Check Istio pods
+kubectl get pods -n istio-system
+
+# Check ingress gateway service and its NodePorts
+kubectl get svc istio-ingressgateway -n istio-system
+
+# Check Istio virtual services (routing rules created by KServe)
+kubectl get virtualservice -n mlops
+
+# Check Istio gateway
+kubectl get gateway -n knative-serving
+
+# View ingress gateway logs (traffic routing errors)
+kubectl logs -n istio-system -l app=istio-ingressgateway --tail=50
+
+# Verify sidecar injection is enabled on namespace
+kubectl get namespace mlops --show-labels
+
+
+# ── Knative ───────────────────────────────────────────────────────────────────
+
+# Check Knative pods
+kubectl get pods -n knative-serving
+
+# List Knative services (one per InferenceService)
+kubectl get ksvc -n mlops
+
+# List Knative revisions (one per deployment update)
+kubectl get revision -n mlops
+
+# Describe a stuck revision
+kubectl describe revision <revision-name> -n mlops
+
+# Check Knative domain config (should contain your minikube IP)
+kubectl get configmap config-domain -n knative-serving -o yaml
+
+
+# ── KServe ────────────────────────────────────────────────────────────────────
+
+# Check KServe controller
+kubectl get pods -n kserve
+
+# List InferenceServices
+kubectl get inferenceservice -n mlops
+
+# Describe InferenceService (shows conditions and events)
+kubectl describe inferenceservice iris-classifier -n mlops
+
+# Get InferenceService URL
+kubectl get inferenceservice iris-classifier -n mlops -o jsonpath='{.status.url}'
+
+# Check traffic split (canary routing)
+kubectl get inferenceservice iris-classifier -n mlops -o yaml | grep -A10 traffic
+
+# View model pod logs (if a pod is currently running)
+kubectl logs -n mlops -l serving.kserve.io/inferenceservice=iris-classifier -c kserve-container
+
+# View KServe controller logs
+kubectl logs -n kserve -l control-plane=kserve-controller-manager --tail=50
+
+
+# ── Canary deployment flow ────────────────────────────────────────────────────
+
+# Step 1: Edit 05-inference-service.yaml, uncomment canaryTrafficPercent: 20
+# Step 2: Apply the updated yaml
+kubectl apply -f k8s/phase4-kserve/05-inference-service.yaml
+
+# Step 3: Check traffic split
+kubectl get revision -n mlops
+kubectl get inferenceservice iris-classifier -n mlops
+
+# Step 4a: Promote (make new version 100%)
+# Remove canaryTrafficPercent from yaml, then:
+kubectl apply -f k8s/phase4-kserve/05-inference-service.yaml
+
+# Step 4b: Rollback (bring old version back to 100%)
+kubectl rollout undo -n mlops ksvc/iris-classifier-predictor

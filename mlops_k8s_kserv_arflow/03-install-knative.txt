@@ -1,0 +1,74 @@
+# Phase 4 — Step 3: Install Knative Serving
+# ─────────────────────────────────────────────────
+# WHY Knative:
+#   KServe serverless mode is built on top of Knative Serving.
+#   Knative provides the scale-to-zero and revision management.
+#   Without Knative, KServe cannot create InferenceServices in serverless mode.
+#
+# What Knative gives you:
+#   - Scale to zero: pod count drops to 0 when no requests arrive
+#   - Revisions: every update to your model creates a new revision
+#   - Traffic split: 80% to revision-1, 20% to revision-2 (canary)
+# ─────────────────────────────────────────────────
+
+
+# ── Install Knative Serving CRDs ─────────────────────────────────────────────
+kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.12.0/serving-crds.yaml
+
+
+# ── Install Knative Serving core ─────────────────────────────────────────────
+kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.12.0/serving-core.yaml
+
+
+# ── Connect Knative to Istio for traffic routing ──────────────────────────────
+kubectl apply -f https://github.com/knative/net-istio/releases/download/knative-v1.12.0/net-istio.yaml
+
+
+# ── Configure Knative domain using sslip.io ───────────────────────────────────
+# WHY sslip.io:
+#   Knative needs a real DNS domain for service URLs.
+#   sslip.io is a public DNS service that resolves *.192.168.49.2.sslip.io
+#   directly to 192.168.49.2 — no DNS setup needed on your machine.
+#   Your model will be available at:
+#   http://iris-classifier.mlops.$(minikube ip).sslip.io:32080
+
+# Get your Minikube IP first
+minikube ip
+# Example: 192.168.49.2
+
+# Patch the Knative domain config with your Minikube IP
+# REPLACE 192.168.49.2 with your actual minikube ip output
+kubectl patch configmap/config-domain \
+  --namespace knative-serving \
+  --type merge \
+  --patch '{"data":{"192.168.49.2.sslip.io":""}}'
+
+
+# Wait for Knative controller to be ready
+kubectl wait --for=condition=ready pod \
+  -l app=controller \
+  -n knative-serving \
+  --timeout=300s
+
+
+# Wait for Knative webhook to be ready
+kubectl wait --for=condition=ready pod \
+  -l app=webhook \
+  -n knative-serving \
+  --timeout=120s
+
+
+# Verify all Knative pods are Running
+kubectl get pods -n knative-serving
+# Expected:
+#   NAME                    READY   STATUS
+#   activator-xxx           2/2     Running
+#   autoscaler-xxx          2/2     Running
+#   controller-xxx          2/2     Running
+#   net-istio-controller-xx 2/2     Running
+#   webhook-xxx             2/2     Running
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 04-install-kserve.txt
+# ─────────────────────────────────────────────────

@@ -1,0 +1,108 @@
+# Phase 5 — Debug Commands Reference
+# ─────────────────────────────────────────────────
+
+
+# ── Airflow pods ──────────────────────────────────────────────────────────────
+
+kubectl get pods -n airflow
+
+# Scheduler logs (task dispatching, DAG parsing)
+kubectl logs -n airflow -l component=scheduler -f
+
+# Webserver logs (UI errors)
+kubectl logs -n airflow -l component=webserver -f
+
+# Exec into scheduler for Airflow CLI access
+kubectl exec -it \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -n airflow -- bash
+
+
+# ── DAG management ────────────────────────────────────────────────────────────
+
+# List all DAGs
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags list
+
+# Check for import errors (syntax errors in DAG files)
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags list-import-errors
+
+# Pause DAG (stop automatic runs)
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags pause mlops_training_pipeline
+
+# Unpause DAG (resume automatic runs)
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags unpause mlops_training_pipeline
+
+# Trigger a manual run
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags trigger mlops_training_pipeline
+
+# List recent runs
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags list-runs -d mlops_training_pipeline
+
+
+# ── Update DAG file ───────────────────────────────────────────────────────────
+
+# Edit the DAG locally
+# vim k8s/phase5-airflow/dags/mlops_pipeline.py
+
+# Copy updated DAG to both scheduler and webserver
+kubectl cp k8s/phase5-airflow/dags/mlops_pipeline.py \
+  airflow/$(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}'):/opt/airflow/dags/mlops_pipeline.py
+
+kubectl cp k8s/phase5-airflow/dags/mlops_pipeline.py \
+  airflow/$(kubectl get pod -n airflow -l component=webserver -o jsonpath='{.items[0].metadata.name}'):/opt/airflow/dags/mlops_pipeline.py
+
+# Airflow picks up changes within 30 seconds — check for errors:
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags list-import-errors
+
+
+# ── Task pod logs ─────────────────────────────────────────────────────────────
+
+# While a task is running, find its pod in mlops namespace
+kubectl get pods -n mlops | grep airflow
+
+# Follow logs of a specific task pod
+kubectl logs -n mlops airflow-train-model-xxx -f
+
+# If pod already deleted (task finished), view logs in Airflow UI:
+# DAGs → mlops_training_pipeline → click task square → Log
+
+
+# ── Helm upgrade (change values after install) ────────────────────────────────
+
+# Edit airflow-values.yaml, then:
+helm upgrade airflow apache-airflow/airflow \
+  --namespace airflow \
+  --values k8s/phase5-airflow/airflow-values.yaml
+
+# Check upgrade status
+helm status airflow -n airflow
+
+
+# ── Remove Airflow completely ─────────────────────────────────────────────────
+
+helm uninstall airflow -n airflow
+kubectl delete namespace airflow
+
+
+# ── NodePort reference ────────────────────────────────────────────────────────
+
+# All services and their access URLs:
+echo "MLflow UI:    http://$(minikube ip):30500"
+echo "Airflow UI:   http://$(minikube ip):30808"
+echo "Prometheus:   http://$(minikube ip):30090"
+echo "Grafana:      http://$(minikube ip):30300"
+echo "KServe model: http://iris-classifier.mlops.$(minikube ip).sslip.io:32080"

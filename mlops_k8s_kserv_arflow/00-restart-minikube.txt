@@ -1,0 +1,69 @@
+# Phase 4 — Step 0: Restart Minikube with 16GB RAM
+# ─────────────────────────────────────────────────
+# WHY: Istio + KServe + your existing stack needs ~14GB RAM.
+# Your machine has 25GB so this is safe.
+# Run these commands one by one in your terminal.
+# ─────────────────────────────────────────────────
+
+
+# Stop the current Minikube
+minikube stop
+
+
+# Start with 16GB RAM
+minikube start --cpus=6 --memory=16384 --disk-size=40g --driver=docker
+
+
+# Re-enable metrics-server addon (resets on minikube stop)
+minikube addons enable metrics-server
+
+
+# Verify cluster is up
+minikube status
+kubectl get nodes
+
+
+# ─────────────────────────────────────────────────
+# Point Docker CLI to Minikube's internal Docker daemon
+# WHY: images must be built inside Minikube, not host Docker
+# ─────────────────────────────────────────────────
+eval $(minikube docker-env)
+
+
+# Confirm you are inside Minikube's Docker
+docker info | grep Name
+# Expected output:  Name: minikube
+
+
+# Build all three images inside Minikube
+cd ~/mlops-learnings
+
+docker build -f docker/Dockerfile         -t docker-mlflow:latest   .
+docker build -f docker/Dockerfile.api     -t docker-fastapi:latest  .
+docker build -f docker/Dockerfile.metrics -t docker-metrics:latest  .
+
+
+# Verify images exist inside Minikube
+docker images | grep docker-
+# Expected:
+#   docker-metrics   latest   ...
+#   docker-fastapi   latest   ...
+#   docker-mlflow    latest   ...
+
+
+# Redeploy the base stack (postgres, mlflow, fastapi, metrics, prometheus, grafana)
+kubectl apply -k k8s/
+
+
+# Watch pods start — wait until all show Running
+kubectl get pods -n mlops -w
+# Expected final state:
+#   postgres-0     1/1   Running
+#   mlflow-xxx     1/1   Running
+#   fastapi-xxx    1/1   Running (x2)
+#   metrics-xxx    1/1   Running
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 01-install-cert-manager.txt
+# ─────────────────────────────────────────────────

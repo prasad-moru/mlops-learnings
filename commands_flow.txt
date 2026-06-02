@@ -141,3 +141,15 @@ for d in datasets:
     print(f'Tags    : {d.tags}')
     print()
 "
+
+
+
+
+
+kubectl exec -it postgres-0 -n mlops -- \
+  psql -U mlflow_user -d mlflow_db -c "
+UPDATE experiments
+SET artifact_location = 'mlflow-artifacts:/' || experiment_id
+WHERE artifact_location NOT LIKE 'mlflow-artifacts:%';
+SELECT experiment_id, name, artifact_location FROM experiments ORDER BY experiment_id;
+"

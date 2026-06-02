@@ -1,0 +1,29 @@
+# Phase 5 — Step 0: Install Helm
+# ─────────────────────────────────────────────────
+# WHY Helm:
+#   Airflow has 40+ Kubernetes objects (Deployments, Services, ConfigMaps,
+#   RBAC, PVCs, Secrets etc.). Helm packages them into a single chart
+#   with one install command. Without Helm you would write all 40 YAML files.
+#
+# Helm for Airflow is like docker-compose for containers —
+#   one command installs everything configured via values.yaml.
+# ─────────────────────────────────────────────────
+
+
+# Check if Helm is already installed
+helm version
+# If command found: skip the install below, go straight to Step 1
+
+
+# Install Helm (if not already installed)
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+
+# Verify installation
+helm version
+# Expected: version.BuildInfo{Version:"v3.x.x", ...}
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 01-install-airflow.txt
+# ─────────────────────────────────────────────────

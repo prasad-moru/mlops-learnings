@@ -1,0 +1,47 @@
+# ── Airflow RBAC ──────────────────────────────────────────────────────────────
+# Gives Airflow permission to create pods in the mlops namespace.
+# Required for KubernetesPodOperator in the training DAG.
+#
+# Three objects:
+#   ServiceAccount  → identity Airflow uses when calling K8s API
+#   Role            → what actions are allowed in mlops namespace
+#   RoleBinding     → connects ServiceAccount to Role
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: airflow-worker
+  namespace: airflow
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-creator
+  namespace: mlops
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-pod-creator
+  namespace: mlops
+  labels:
+    app.kubernetes.io/part-of: mlops-stack
+subjects:
+  - kind: ServiceAccount
+    name: airflow-worker
+    namespace: airflow
+roleRef:
+  kind: Role
+  name: pod-creator
+  apiGroup: rbac.authorization.k8s.io

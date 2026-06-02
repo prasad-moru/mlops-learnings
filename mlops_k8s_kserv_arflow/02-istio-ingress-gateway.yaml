@@ -1,0 +1,30 @@
+# Istio Ingress Gateway
+# ─────────────────────────────────────────────────
+# Installed as part of Step 2 (Istio).
+# This is the single entry point for all external traffic.
+#
+# NodePort mapping:
+#   Port 32080 → HTTP (your model inference requests go here)
+#   Port 32443 → HTTPS
+#
+# After KServe is installed, all /predict requests are routed:
+#   client → NodePort 32080 → IngressGateway → Knative → your pod
+# ─────────────────────────────────────────────────
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: istio-ingressgateway
+  namespace: istio-system
+spec:
+  profile: empty
+  components:
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+  values:
+    gateways:
+      istio-ingressgateway:
+        type: NodePort
+        nodePorts:
+          http2: 32080
+          https: 32443

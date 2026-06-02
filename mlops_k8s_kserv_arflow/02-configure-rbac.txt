@@ -1,0 +1,28 @@
+# Phase 5 — Step 2: Configure RBAC
+# ─────────────────────────────────────────────────
+# WHY RBAC is needed:
+#   The DAG uses KubernetesPodOperator — it creates pods in the mlops namespace
+#   on behalf of Airflow. By default, the Airflow service account has no
+#   permission to create pods in other namespaces.
+#
+#   Without this RBAC:
+#     Airflow tries to create a training pod in mlops namespace → FORBIDDEN error
+#
+#   With this RBAC:
+#     Airflow's service account can create/list/delete pods in mlops namespace
+# ─────────────────────────────────────────────────
+
+
+# Apply the RBAC manifest
+kubectl apply -f k8s/phase5-airflow/02-airflow-rbac.yaml
+
+
+# Verify RBAC objects were created
+kubectl get serviceaccount airflow-worker -n airflow
+kubectl get role pod-creator -n mlops
+kubectl get rolebinding airflow-pod-creator -n mlops
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 03-deploy-dag.txt
+# ─────────────────────────────────────────────────

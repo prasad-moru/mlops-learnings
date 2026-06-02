@@ -1,0 +1,128 @@
+# Phase 4 — Step 2: Install Istio
+# ─────────────────────────────────────────────────
+# WHY Istio:
+#   KServe serverless mode uses Istio for:
+#     - Traffic routing between model revisions (canary deployments)
+#     - Single ingress gateway — one URL for all model endpoints
+#     - mTLS between services
+#
+# WHY minimal profile:
+#   Full Istio uses ~4GB RAM.
+#   Minimal profile installs only istiod (control plane) + ingress gateway.
+#   Enough for KServe. Saves RAM for your models.
+#
+# WHAT changes after Istio:
+#   Before:  http://$(minikube ip):30800/predict
+#   After:   http://iris-classifier.mlops.$(minikube ip).sslip.io:32080/predict
+#            (routed through Istio ingress gateway)
+# ─────────────────────────────────────────────────
+
+
+# ── Download istioctl ──────────────────────────────────────────────────────
+# Downloads to ./istio-1.20.3/ in your current directory
+cd ~/mlops-learnings
+
+curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.20.3 TARGET_ARCH=x86_64 sh -
+
+
+# Add istioctl to your PATH for this session
+export PATH=$HOME/mlops-learnings/istio-1.20.3/bin:$PATH
+
+
+# Verify istioctl is available
+istioctl version --remote=false
+# Expected: Istio is not running but istioctl version works
+
+
+# ── Install Istio (minimal profile) ──────────────────────────────────────────
+istioctl install --set profile=minimal -y
+# Takes ~3 minutes
+
+
+# Wait for istiod (Istio control plane) to be ready
+kubectl wait --for=condition=ready pod \
+  -l app=istiod \
+  -n istio-system \
+  --timeout=300s
+
+
+# Verify istiod is running
+kubectl get pods -n istio-system
+# Expected:
+#   NAME          READY   STATUS
+#   istiod-xxx    1/1     Running
+
+
+# ── Install Istio Ingress Gateway ─────────────────────────────────────────────
+# This is the single entry point for all external traffic.
+# KServe routes all inference requests through this gateway.
+kubectl apply -f k8s/phase4-kserve/02-istio-ingress-gateway.yaml
+
+
+istioctl install \
+  --set profile=minimal \
+  --set components.ingressGateways[0].enabled=true \
+  --set components.ingressGateways[0].name=istio-ingressgateway \
+  --set components.ingressGateways[0].k8s.service.type=NodePort \
+  --set components.ingressGateways[0].k8s.service.ports[0].name=http2 \
+  --set components.ingressGateways[0].k8s.service.ports[0].port=80 \
+  --set components.ingressGateways[0].k8s.service.ports[0].targetPort=8080 \
+  --set components.ingressGateways[0].k8s.service.ports[0].nodePort=32080 \
+  --set components.ingressGateways[0].k8s.service.ports[1].name=https \
+  --set components.ingressGateways[0].k8s.service.ports[1].port=443 \
+  --set components.ingressGateways[0].k8s.service.ports[1].targetPort=8443 \
+  --set components.ingressGateways[0].k8s.service.ports[1].nodePort=32443 \
+  -y
+
+
+
+# Wait for ingress gateway pod
+kubectl wait --for=condition=ready pod \
+  -l app=istio-ingressgateway \
+  -n istio-system \
+  --timeout=300s
+
+
+# Verify ingress gateway is running
+kubectl get pods -n istio-system
+# Expected (both running):
+#   istiod-xxx                   1/1     Running
+#   istio-ingressgateway-xxx     1/1     Running
+
+
+# ── Enable Istio sidecar injection in mlops namespace ─────────────────────────
+# WHY: KServe serverless needs Istio sidecars in the mlops namespace
+# to intercept traffic and handle scale-to-zero routing.
+# Each pod will get a second container: istio-proxy
+kubectl label namespace mlops istio-injection=enabled --overwrite
+
+
+# Verify label was applied
+kubectl get namespace mlops --show-labels
+# Expected: istio-injection=enabled in labels
+
+
+# ── Restart existing pods to inject sidecars ──────────────────────────────────
+# Existing pods need restart to get the istio-proxy sidecar injected
+kubectl rollout restart deployment/mlflow   -n mlops
+kubectl rollout restart deployment/fastapi  -n mlops
+kubectl rollout restart deployment/metrics  -n mlops
+
+
+# Wait for rollouts
+kubectl rollout status deployment/mlflow  -n mlops --timeout=120s
+kubectl rollout status deployment/fastapi -n mlops --timeout=120s
+kubectl rollout status deployment/metrics -n mlops --timeout=120s
+
+
+# Verify pods now have 2 containers each (app + istio-proxy)
+kubectl get pods -n mlops
+# Expected: READY column shows 2/2 (or 3/3 for pods with init containers)
+#   postgres-0     2/2   Running
+#   mlflow-xxx     2/2   Running
+#   fastapi-xxx    3/3   Running
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 03-install-knative.txt
+# ─────────────────────────────────────────────────

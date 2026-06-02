@@ -1,0 +1,99 @@
+# Phase 4 — Step 5: Replace FastAPI with InferenceService
+# ─────────────────────────────────────────────────
+# This step removes the Phase 3 FastAPI Deployment and replaces it
+# with a KServe InferenceService.
+#
+# BEFORE (Phase 3):        AFTER (Phase 4):
+#   Deployment             InferenceService
+#   Service                (KServe creates Service automatically)
+#   HPA                    (KServe handles scaling via Knative)
+#   3 YAML objects         1 YAML object
+# ─────────────────────────────────────────────────
+
+
+# ── Remove Phase 3 FastAPI resources ─────────────────────────────────────────
+kubectl delete deployment fastapi    -n mlops
+kubectl delete service   fastapi    -n mlops
+kubectl delete hpa       fastapi-hpa -n mlops
+
+
+# Confirm they are gone
+kubectl get all -n mlops
+# fastapi should no longer appear
+
+
+# ── Apply the InferenceService ────────────────────────────────────────────────
+kubectl apply -f k8s/phase4-kserve/05-inference-service.yaml
+
+
+# Watch InferenceService initialise (takes 60-90 seconds)
+kubectl get inferenceservice iris-classifier -n mlops -w
+# Watch READY column — wait for True:
+#   NAME               URL                                              READY   PREV   LATEST
+#   iris-classifier    http://iris-classifier.mlops.192.168.49.2...   False          100
+#   iris-classifier    http://iris-classifier.mlops.192.168.49.2...   True           100
+
+
+# ── Get your model endpoint URL ───────────────────────────────────────────────
+kubectl get inferenceservice iris-classifier -n mlops
+# Copy the URL from the output — looks like:
+# http://iris-classifier.mlops.192.168.49.2.sslip.io
+
+
+# ── Test prediction ───────────────────────────────────────────────────────────
+# Replace 192.168.49.2 with your minikube ip
+# Port 32080 is the Istio ingress gateway NodePort
+
+curl -s -X POST \
+  http://iris-classifier.mlops.192.168.58.2.sslip.io:32080/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}' \
+  | python3 -m json.tool
+
+# Expected:
+# {
+#   "class_id": 0,
+#   "class_name": "setosa",
+#   "probability": 0.97,
+#   "model_version": "5"
+# }
+
+
+# ── Test scale to zero ────────────────────────────────────────────────────────
+# Stop sending traffic — wait 90 seconds
+# Knative will scale the pod to 0
+kubectl get pods -n mlops -w
+# The iris-classifier pod disappears after ~90s of no traffic
+
+# Send a request after scale-to-zero — first request takes ~15s (cold start)
+# Subsequent requests are fast
+time curl -s -X POST \
+  http://iris-classifier.mlops.192.168.49.2.sslip.io:32080/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
+
+
+# ── Traffic loop (same as Phase 3) ────────────────────────────────────────────
+# Replace URL with your actual InferenceService URL
+python3 -c "
+import requests, time, random
+url = 'http://iris-classifier.mlops.192.168.58.2.sslip.io:32080/predict'
+samples = [
+  {'sepal_length':5.1,'sepal_width':3.5,'petal_length':1.4,'petal_width':0.2},
+  {'sepal_length':6.0,'sepal_width':2.7,'petal_length':5.1,'petal_width':1.6},
+  {'sepal_length':6.9,'sepal_width':3.1,'petal_length':5.4,'petal_width':2.1},
+]
+count = 0
+while True:
+    r = requests.post(url, json=random.choice(samples))
+    count += 1
+    print(r.json()['class_name'], end=' ', flush=True)
+    if count % 20 == 0: print(f'[{count}]')
+    time.sleep(1)
+"
+
+
+# ─────────────────────────────────────────────────
+# Phase 4 COMPLETE
+# Continue to Phase 5: k8s/phase5-airflow/
+# ─────────────────────────────────────────────────

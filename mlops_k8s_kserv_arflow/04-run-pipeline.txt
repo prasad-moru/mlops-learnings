@@ -1,0 +1,77 @@
+# Phase 5 — Step 4: Run and Monitor the Pipeline
+# ─────────────────────────────────────────────────
+# The pipeline runs automatically every Monday at 2am.
+# Trigger it manually now to test it end to end.
+# ─────────────────────────────────────────────────
+
+
+# ── Trigger pipeline manually via CLI ────────────────────────────────────────
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags trigger mlops_training_pipeline
+
+# Expected:
+#   Created <DagRun mlops_training_pipeline @ 2024-...: manual__, externally triggered: True>
+
+
+# ── Watch task pods being created in mlops namespace ─────────────────────────
+# Each KubernetesPodOperator task creates a pod, runs, then deletes it
+kubectl get pods -n mlops -w
+# You will see pods appear and disappear for each task:
+#   airflow-train-model-xxx      Pending → Running → Completed
+#   airflow-tune-model-xxx       Pending → Running → Completed
+#   airflow-register-model-xxx   Pending → Running → Completed
+#   airflow-verify-deployment-xx Pending → Running → Completed
+
+
+# ── Follow scheduler logs (shows task state transitions) ─────────────────────
+kubectl logs -n airflow \
+  -l component=scheduler -f
+# Look for lines like:
+#   Task exited with return code 0: train_model
+#   Task exited with return code 0: accuracy_gate
+
+
+# ── Follow a specific task pod's logs ────────────────────────────────────────
+# While the training pod is running:
+kubectl logs -n mlops -l airflow_task_id=train_model -f
+
+
+# ── Check run status via CLI ──────────────────────────────────────────────────
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags list-runs -d mlops_training_pipeline
+# Shows: state=running → state=success
+
+
+# ── Monitor in Airflow UI ─────────────────────────────────────────────────────
+echo "http://$(minikube ip):30808"
+# Path in UI: DAGs → mlops_training_pipeline → Graph (click the latest run circle)
+# Green = success, Red = failed, Yellow = running
+
+
+# ── Pipeline success confirmation ─────────────────────────────────────────────
+# After all tasks complete green, verify the model was updated in MLflow:
+kubectl port-forward svc/mlflow -n mlops 5000:5000 &
+# Open http://localhost:5000 → Models → iris_classifier → check latest version
+
+
+# ── Test the endpoint still works after retraining ────────────────────────────
+# If using Phase 3 (FastAPI NodePort):
+curl -s -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
+
+# If using Phase 4 (KServe InferenceService):
+# Replace IP with your minikube ip
+curl -s -X POST \
+  http://iris-classifier.mlops.192.168.49.2.sslip.io:32080/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width':0.2}'
+
+
+# ─────────────────────────────────────────────────
+# Phase 5 COMPLETE
+# Your pipeline now runs automatically every Monday 2am
+# and trains → evaluates → registers → deploys without manual steps.
+# ─────────────────────────────────────────────────

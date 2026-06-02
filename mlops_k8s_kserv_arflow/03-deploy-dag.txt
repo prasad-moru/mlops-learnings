@@ -1,0 +1,54 @@
+# Phase 5 — Step 3: Deploy the DAG
+# ─────────────────────────────────────────────────
+# The DAG file (mlops_pipeline.py) defines the training pipeline.
+# Airflow reads DAG files from /opt/airflow/dags/ inside the scheduler pod.
+# We copy the file there using kubectl cp.
+# ─────────────────────────────────────────────────
+
+
+# Get the scheduler pod name
+kubectl get pods -n airflow -l component=scheduler
+# Copy the NAME from the output — e.g. airflow-scheduler-6d7f8b9c4-xk9p2
+
+
+# Copy the DAG file into the scheduler pod
+# Replace airflow-scheduler-xxx with your actual pod name
+kubectl cp k8s/phase5-airflow/dags/mlops_pipeline.py \
+  airflow/airflow-scheduler-xxx:/opt/airflow/dags/mlops_pipeline.py
+
+
+# Also copy to the webserver pod (needed for UI display)
+kubectl get pods -n airflow -l component=webserver
+kubectl cp k8s/phase5-airflow/dags/mlops_pipeline.py \
+  airflow/airflow-webserver-xxx:/opt/airflow/dags/mlops_pipeline.py
+
+
+# Wait ~30 seconds for Airflow to detect the new DAG file
+sleep 30
+
+
+# Verify DAG is loaded inside the scheduler
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags list
+# Expected:
+#   dag_id                    | ...
+#   mlops_training_pipeline   | ...
+
+
+# Check for any DAG parse errors
+kubectl exec -n airflow \
+  $(kubectl get pod -n airflow -l component=scheduler -o jsonpath='{.items[0].metadata.name}') \
+  -- airflow dags list-import-errors
+# Expected: empty (no errors)
+
+
+# Open the Airflow UI to confirm the DAG appears
+echo "Airflow UI: http://$(minikube ip):30808"
+# Navigate to: DAGs → mlops_training_pipeline
+# It should show the pipeline graph with 7 tasks
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 04-run-pipeline.txt
+# ─────────────────────────────────────────────────

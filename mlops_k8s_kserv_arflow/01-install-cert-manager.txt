@@ -1,0 +1,49 @@
+# Phase 4 — Step 1: Install cert-manager
+# ─────────────────────────────────────────────────
+# WHY cert-manager:
+#   KServe and Istio both use admission webhooks.
+#   Webhooks require TLS certificates to work.
+#   cert-manager issues and renews those certificates automatically.
+#   KServe WILL NOT START without cert-manager running first.
+#
+# Install order is mandatory:
+#   cert-manager → Istio → KServe
+# ─────────────────────────────────────────────────
+
+
+# Apply cert-manager — installs into its own cert-manager namespace
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+
+
+# Wait for all three cert-manager pods to become Ready (takes ~2 minutes)
+kubectl wait --for=condition=ready pod \
+  -l app.kubernetes.io/instance=cert-manager \
+  -n cert-manager \
+  --timeout=180s
+
+
+# Verify all three pods are Running
+kubectl get pods -n cert-manager
+# Expected:
+#   NAME                                      READY   STATUS
+#   cert-manager-xxx                          1/1     Running
+#   cert-manager-cainjector-xxx               1/1     Running
+#   cert-manager-webhook-xxx                  1/1     Running
+
+
+# ─────────────────────────────────────────────────
+# Verify the webhook is functional by creating a test ClusterIssuer
+# ─────────────────────────────────────────────────
+kubectl apply -f k8s/phase4-kserve/01-cert-manager-test.yaml
+
+
+# Check the ClusterIssuer was accepted (webhook working)
+kubectl get clusterissuer selfsigned-issuer
+# Expected:
+#   NAME                READY   AGE
+#   selfsigned-issuer   True    5s
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 02-install-istio.txt
+# ─────────────────────────────────────────────────

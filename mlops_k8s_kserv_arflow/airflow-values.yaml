@@ -1,0 +1,133 @@
+executor: "LocalExecutor"
+
+# ── Environment variables ─────────────────────────────────────────────────────
+env:
+  - name: MLFLOW_TRACKING_URI
+    value: "http://mlflow.mlops.svc.cluster.local:5000"
+  - name: MODEL_NAME
+    value: "iris_classifier"
+  - name: MODEL_ALIAS
+    value: "champion"
+  - name: EXPERIMENT_NAME
+    value: "iris_classification"
+  - name: MIN_ACCURACY
+    value: "0.90"
+
+# ── Webserver ─────────────────────────────────────────────────────────────────
+webserver:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"              # increased from 500m — workers need headroom
+      memory: "1Gi"
+  service:
+    type: NodePort
+    ports:
+      - name: airflow-ui
+        port: 8080
+        targetPort: airflow-ui
+        nodePort: 30808
+  startupProbe:
+    failureThreshold: 30        # 30 x 10s = 5 minutes to fully start
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 120
+    periodSeconds: 30
+    failureThreshold: 5
+  readinessProbe:
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    failureThreshold: 5
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+scheduler:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "300m"
+      memory: "512Mi"
+
+# ── PostgreSQL ────────────────────────────────────────────────────────────────
+# Disabled — using existing postgres pod in mlops namespace instead.
+# Airflow metadata (DAG runs, task states) stored in airflow_db database
+# on the same postgres-0 pod that holds mlflow_db.
+# Connection string is in the airflow-db-secret Secret.
+postgresql:
+  enabled: false
+
+# Point Airflow at the existing postgres pod in mlops namespace
+data:
+  metadataSecretName: airflow-db-secret
+  resultBackendSecretName: airflow-db-secret
+
+# ── statsd ────────────────────────────────────────────────────────────────────
+# Disabled — image pull times out on WSL2/Minikube
+statsd:
+  enabled: false
+
+# ── DAGs ──────────────────────────────────────────────────────────────────────
+dags:
+  gitSync:
+    enabled: false
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClassName: standard
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs:
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: standard
+
+# ── Connections ───────────────────────────────────────────────────────────────
+connections:
+  - id: mlflow_default
+    type: http
+    host: "http://mlflow.mlops.svc.cluster.local"
+    port: 5000
+    description: "MLflow tracking server"
+
+# ── Config ────────────────────────────────────────────────────────────────────
+config:
+  webserver:
+    expose_config: "True"
+    workers: "1"                # gunicorn --workers 1
+    worker_refresh_interval: "30"
+  core:
+    load_examples: "False"
+    dag_file_processor_timeout: "120"
+
+# ── Image ─────────────────────────────────────────────────────────────────────
+images:
+  airflow:
+    repository: apache/airflow
+    tag: "2.8.1"
+    pullPolicy: IfNotPresent
+
+
+scheduler:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"        # increase from 300m
+      memory: "1Gi"
+  startupProbe:
+    timeoutSeconds: 60    # key fix — give the check command 60s instead of 20s
+    failureThreshold: 30  # 30 x 10s = 5 minutes total startup window
+    periodSeconds: 10
+  livenessProbe:
+    timeoutSeconds: 60
+    initialDelaySeconds: 120
+    periodSeconds: 30
+    failureThreshold: 5

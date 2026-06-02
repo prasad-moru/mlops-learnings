@@ -1,0 +1,49 @@
+# Phase 4 — Step 4: Install KServe
+# ─────────────────────────────────────────────────
+# WHY KServe:
+#   Adds the InferenceService CRD to your cluster.
+#   After this step, you can replace fastapi Deployment with a single
+#   InferenceService YAML and get:
+#     - Scale to zero (0 pods when idle)
+#     - Canary traffic split (20% new / 80% champion)
+#     - Automatic /predict, /health endpoints
+#     - Auto-scaling based on concurrent requests
+# ─────────────────────────────────────────────────
+
+
+# ── Install KServe ────────────────────────────────────────────────────────────
+kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.12.0/kserve.yaml
+
+
+# ── Install KServe cluster-scoped resources ───────────────────────────────────
+kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.12.0/kserve-cluster-resources.yaml
+
+
+kubectl patch deployment kserve-controller-manager -n kserve \
+  --type='json' \
+  -p='[{"op":"replace","path":"/spec/template/spec/containers/1/image","value":"quay.io/brancz/kube-rbac-proxy:v0.14.1"}]'
+
+# Wait for KServe controller to be ready (takes ~3 minutes)
+kubectl wait --for=condition=ready pod \
+  -l control-plane=kserve-controller-manager \
+  -n kserve \
+  --timeout=300s
+
+
+# Verify KServe controller is running
+kubectl get pods -n kserve
+# Expected:
+#   NAME                                   READY   STATUS
+#   kserve-controller-manager-xxx          2/2     Running
+
+
+# Verify InferenceService CRD is registered
+kubectl get crd inferenceservices.serving.kserve.io
+# Expected:
+#   NAME                                    CREATED AT
+#   inferenceservices.serving.kserve.io     2024-...
+
+
+# ─────────────────────────────────────────────────
+# DONE. Continue to: 05-replace-fastapi.txt
+# ─────────────────────────────────────────────────
