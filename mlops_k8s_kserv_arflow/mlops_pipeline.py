@@ -121,28 +121,36 @@ def check_mlflow_health(**context):
 
 
 def accuracy_gate(**context):
-    """
-    BranchPythonOperator task.
-    Reads model accuracy from XCom (pushed by train_model task).
-    Returns the task_id of the next task to run:
-      - "register_champion"          if accuracy >= threshold
-      - "accuracy_below_threshold"   if accuracy < threshold
-    """
-    ti = context["ti"]
-    accuracy = ti.xcom_pull(task_ids="train_model", key="accuracy")
+    import urllib.request
+    import json
 
-    if accuracy is None:
-        logging.warning("No accuracy in XCom — reading from MLflow directly")
-        import mlflow
-        client = mlflow.tracking.MlflowClient(
-            "http://mlflow.mlops.svc.cluster.local:5000"
-        )
-        runs = client.search_runs(
-            experiment_names=["iris_classification"],
-            order_by=["start_time DESC"],
-            max_results=1,
-        )
-        accuracy = runs[0].data.metrics.get("accuracy", 0.0) if runs else 0.0
+    # Read latest run accuracy via MLflow REST API — no mlflow SDK needed
+    uri = "http://mlflow.mlops.svc.cluster.local:5000"
+    
+    # Get experiment ID
+    exp_url = f"{uri}/api/2.0/mlflow/experiments/get-by-name?experiment_name=iris_classification"
+    with urllib.request.urlopen(exp_url, timeout=10) as r:
+        exp_id = json.loads(r.read())["experiment"]["experiment_id"]
+
+    # Get latest run
+    search_url = f"{uri}/api/2.0/mlflow/runs/search"
+    payload = json.dumps({
+        "experiment_ids": [exp_id],
+        "max_results": 1,
+        "order_by": ["start_time DESC"]
+    }).encode()
+    req = urllib.request.Request(search_url, data=payload,
+                                  headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        runs = json.loads(r.read()).get("runs", [])
+
+    accuracy = 0.0
+    if runs:
+        metrics = runs[0].get("data", {}).get("metrics", [])
+        for m in metrics:
+            if m["key"] == "accuracy":
+                accuracy = float(m["value"])
+                break
 
     min_accuracy = float(os.getenv("MIN_ACCURACY", "0.90"))
     logging.info(f"Accuracy: {accuracy:.4f}  |  Threshold: {min_accuracy}")
