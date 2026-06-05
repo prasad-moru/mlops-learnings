@@ -1,0 +1,207 @@
+# ── Phase 1: Local Development Setup ─────────────────────────────────────────
+# Run these once to set up the project on a fresh machine.
+# After setup, use the DAILY WORKFLOW section at the bottom.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIRST TIME SETUP (run once)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Step 1 — Install system dependencies
+sudo apt update
+sudo apt install -y python3-venv python3-dev libpq-dev postgresql postgresql-contrib
+
+
+# Step 2 — Create PostgreSQL database
+sudo service postgresql start
+
+sudo -u postgres psql -c "CREATE DATABASE mlflow_db;"
+sudo -u postgres psql -c "CREATE USER mlflow_user WITH PASSWORD 'mlflow_password_2026';"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE mlflow_db TO mlflow_user;"
+sudo -u postgres psql -c "ALTER DATABASE mlflow_db OWNER TO mlflow_user;"
+sudo -u postgres psql -d mlflow_db -c "GRANT ALL ON SCHEMA public TO mlflow_user;"
+
+
+# Step 3 — Create virtual environment
+cd ~/mlops-learnings
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+
+# Step 4 — Copy environment file
+cp .env.example .env
+# Edit .env if you need to change any values
+
+
+# Step 5 — Create artifacts directory
+mkdir -p ~/artifacts
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DAILY WORKFLOW — run these every session
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Start services ────────────────────────────────────────────────────────────
+
+# Start PostgreSQL (required before MLflow)
+sudo service postgresql start
+
+# Start MLflow server in background
+cd ~/mlops-learnings
+source venv/bin/activate
+
+python -m mlflow server \
+  --backend-store-uri postgresql://mlflow_user:mlflow_password_2026@localhost/mlflow_db \
+  --default-artifact-root ~/artifacts \
+  --host 0.0.0.0 \
+  --port 5000 &
+
+# Verify MLflow is running (wait ~3 seconds first)
+sleep 3
+curl -s http://localhost:5000/health
+# Expected: {"status":"OK"}
+# Open in browser: http://localhost:5000
+
+
+# ── Run training pipeline ─────────────────────────────────────────────────────
+
+# Baseline training — logs to MLflow, creates experiment run
+python src/train.py
+
+# Compare 5 hyperparameter configurations
+python src/experiment.py
+
+# Optuna 50-trial search — finds best parameters
+python src/hyperparameter_tuning.py
+
+# Register best model as champion in MLflow registry
+python src/model_registry.py
+
+
+# ── Start the prediction API ──────────────────────────────────────────────────
+
+# Start FastAPI in background
+uvicorn src.api:app --host 0.0.0.0 --port 8000 &
+
+# Verify API is running
+sleep 2
+curl -s http://localhost:8000/health | python3 -m json.tool
+# Expected:
+# {
+#   "status": "healthy",
+#   "model_loaded": true,
+#   "model_uri": "models:/iris_classifier@champion"
+# }
+
+
+# ── Test predictions ──────────────────────────────────────────────────────────
+
+# Single prediction — setosa
+curl -s -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}' \
+  | python3 -m json.tool
+
+# Single prediction — virginica
+curl -s -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":6.9,"sepal_width":3.1,"petal_length":5.4,"petal_width":2.1}' \
+  | python3 -m json.tool
+
+# Continuous traffic loop (Ctrl+C to stop)
+python3 -c "
+import requests, time, random
+url = 'http://localhost:8000/predict'
+samples = [
+  {'sepal_length':5.1,'sepal_width':3.5,'petal_length':1.4,'petal_width':0.2},
+  {'sepal_length':6.0,'sepal_width':2.7,'petal_length':5.1,'petal_width':1.6},
+  {'sepal_length':6.9,'sepal_width':3.1,'petal_length':5.4,'petal_width':2.1},
+]
+count = 0
+while True:
+    r = requests.post(url, json=random.choice(samples))
+    count += 1
+    print(r.json()['class_name'], end=' ', flush=True)
+    if count % 20 == 0: print(f'[{count}]')
+    time.sleep(1)
+"
+
+
+# ── Start monitoring stack ────────────────────────────────────────────────────
+
+# Start ML metrics exporter (Prometheus scrapes this)
+python src/metrics_server.py --port 8001 --interval 60 &
+
+# Start Prometheus (requires systemd setup from setup-guides/STEP_6_MONITORING.txt)
+sudo systemctl start prometheus
+
+# Start Grafana
+sudo systemctl start grafana-server
+
+# Open: http://localhost:3000  (admin/admin)
+
+
+# ── Run tests ─────────────────────────────────────────────────────────────────
+
+# All unit tests
+pytest tests/ -v
+
+# With coverage report
+pytest tests/ -v --cov=src --cov-report=term-missing
+
+# Integration tests (needs live MLflow)
+pytest scripts/smoke_test_mlflow.py -v -m integration
+
+
+# ── Run drift detection ───────────────────────────────────────────────────────
+
+# Normal production scenario (no drift)
+python src/monitoring.py --drift 0.0
+
+# Simulate heavy drift
+python src/monitoring.py --drift 1.5
+
+
+# ── Stop services ─────────────────────────────────────────────────────────────
+
+# Kill MLflow (find its PID)
+ps aux | grep mlflow | grep -v grep
+kill <PID>
+
+# Kill FastAPI
+ps aux | grep uvicorn | grep -v grep
+kill <PID>
+
+# Kill metrics server
+ps aux | grep metrics_server | grep -v grep
+kill <PID>
+
+# Or kill all Python background processes at once (careful — kills ALL python procs)
+# pkill -f "python"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# USEFUL ONE-LINERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Check what's running on a port
+sudo lsof -i :5000
+sudo lsof -i :8000
+
+# Check MLflow experiments via CLI
+mlflow experiments list
+
+# Check registered models via CLI
+mlflow models list
+
+# View live MLflow server log (if started with nohup)
+tail -f ~/mlflow-server.log
+
+# Rollback model to specific version
+python src/model_registry.py --rollback 2
+
+# Set a challenger model for A/B testing
+python src/model_registry.py --challenger 3

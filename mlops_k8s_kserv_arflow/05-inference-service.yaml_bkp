@@ -1,28 +1,25 @@
 # ── KServe InferenceService ───────────────────────────────────────────────────
-# Replaces mlops_k8s_minikube/05-fastapi.yaml entirely after KServe is installed.
+# Replaces k8s/05-fastapi.yaml entirely.
 #
-# KEY FIXES from Phase 3 → Phase 4:
-#   imagePullPolicy: Never  → IfNotPresent   (local images → DockerHub images)
-#   image: docker-fastapi   → prasad890/docker-fastapi:latest
+# BEFORE (Phase 3 — 3 separate objects):
+#   Deployment   → manages pods
+#   HPA          → scales pods
+#   Service      → exposes pods
 #
-# WHY IfNotPresent not Always:
-#   IfNotPresent: pulls from DockerHub if not cached, uses cache otherwise.
-#   Always: pulls on every pod restart — slow cold starts, registry dependency.
-#   IfNotPresent is the right default for stable production images.
-#
-# ENDPOINT after applying:
-#   http://iris-classifier.mlops.$(minikube ip).sslip.io:32080/predict
+# AFTER (Phase 4 — 1 object):
+#   InferenceService → KServe creates Knative Service + Istio VirtualService
+#                      automatically. Scaling, routing, revisions all managed.
 #
 # HOW scale-to-zero works:
 #   No requests for 60s → Knative scales pods to 0.
-#   Next request triggers a cold start (~15s for this model).
-#   Set minReplicas: 1 to disable scale-to-zero.
+#   Next request arrives → Knative starts a pod (cold start ~15s).
+#   minReplicas: 1 disables scale-to-zero (always 1 pod running).
 #
 # HOW canary works:
-#   Uncomment canaryTrafficPercent: 20 and reapply after retraining.
-#   KServe creates revision-2, Istio sends 20% of traffic to it.
-#   Promote: remove canaryTrafficPercent and reapply.
-#   Rollback: kubectl rollout undo -n mlops ksvc/iris-classifier-predictor
+#   Uncomment canaryTrafficPercent: 20 and reapply with updated image/config.
+#   KServe creates revision-2 and sends 20% of traffic to it.
+#   Promote: remove canaryTrafficPercent and reapply → 100% to new revision.
+#   Rollback: kubectl rollout undo → traffic returns to previous revision.
 # ─────────────────────────────────────────────────────────────────────────────
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
@@ -39,26 +36,30 @@ metadata:
 spec:
   predictor:
     # ── Scaling ───────────────────────────────────────────────────────────────
-    minReplicas: 0          # scale to zero when idle
+    minReplicas: 0          # 0 = scale to zero when idle
     maxReplicas: 5
     scaleTarget: 2          # scale up when concurrent requests per pod > 2
     scaleMetric: concurrency
 
-    # ── Canary (uncomment when rolling out a new model version) ──────────────
+    # ── Canary (uncomment to split traffic during new model rollout) ──────────
     # canaryTrafficPercent: 20
     # 80% → current revision, 20% → new revision
-    # Remove and reapply to promote to 100%
+    # Remove this line and reapply to promote new revision to 100%
 
+    # ── Container ─────────────────────────────────────────────────────────────
+    # Using our custom FastAPI image — loads model from MLflow registry.
+    # WHY not built-in KServe sklearn predictor:
+    #   Built-in predictors pull models from S3/GCS/MinIO.
+    #   Our models are in an MLflow PVC. Custom container loads from MLflow.
     containers:
       - name: kserve-container
-        image: prasad890/docker-fastapi:latest   # DockerHub image
-        imagePullPolicy: IfNotPresent             # pull once, cache locally
+        image: prasad890/docker-fastapi:latest
+        imagePullPolicy: Never
         ports:
           - containerPort: 8000
             protocol: TCP
         env:
           - name: MLFLOW_TRACKING_URI
-            # MLflow runs without Istio sidecar (plain HTTP, no mTLS)
             value: "http://mlflow.mlops.svc.cluster.local:5000"
           - name: MODEL_NAME
             valueFrom:

@@ -1,0 +1,59 @@
+# ── MLflow — Disable Istio Sidecar Injection ─────────────────────────────────
+# WHY this patch exists:
+#   MLflow is a plain HTTP server. It does not benefit from Istio mTLS.
+#   With Istio sidecar injection enabled on the mlops namespace, the MLflow
+#   pod gets an istio-proxy sidecar that intercepts all traffic and returns
+#   503 when non-sidecar training pods connect with plain HTTP.
+#
+#   The cleanest fix: disable Istio injection on the MLflow deployment.
+#   Training pods connect to MLflow directly without any TLS negotiation.
+#
+# Apply this patch AFTER Istio is installed and sidecar injection is enabled:
+#   kubectl apply -f mlops_k8s_kserv_arflow/mlflow-no-istio.yaml
+#
+# This creates a patch that adds the annotation to the MLflow deployment.
+# kubectl patch is idempotent — safe to apply multiple times.
+#
+# Verify MLflow pod shows 1/1 (no sidecar) after patch:
+#   kubectl get pods -n mlops -l app=mlflow
+#   # NAME           READY   STATUS
+#   # mlflow-xxx     1/1     Running   ← 1/1 means no Istio sidecar
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# NOTE: This is a strategic patch file, not a standalone manifest.
+# Apply via kubectl patch (the annotation key contains a slash which
+# requires JSON patch format):
+#
+#   kubectl patch deployment mlflow -n mlops \
+#     --type='json' \
+#     -p='[{"op":"add","path":"/spec/template/metadata/annotations/sidecar.istio.io~1inject","value":"false"}]'
+#
+# The YAML below documents the resulting annotation for reference.
+# ─────────────────────────────────────────────────────────────────────────────
+# Resulting pod template annotation (for documentation):
+#
+# spec:
+#   template:
+#     metadata:
+#       annotations:
+#         sidecar.istio.io/inject: "false"   # disable Istio proxy on MLflow
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# To apply programmatically, use the kubectl patch command above.
+# To revert (re-enable Istio on MLflow):
+#
+#   kubectl patch deployment mlflow -n mlops \
+#     --type='json' \
+#     -p='[{"op":"remove","path":"/spec/template/metadata/annotations/sidecar.istio.io~1inject"}]'
+#
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: mlops
+spec:
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"   # keep MLflow as plain HTTP — no mTLS

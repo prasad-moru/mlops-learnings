@@ -1,0 +1,190 @@
+# ── Phase 2: Docker Compose Setup ────────────────────────────────────────────
+# Runs all 6 services in containers.
+# WHY Docker instead of local: one command starts everything,
+# no dependency conflicts, same environment on any machine.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIRST TIME SETUP (run once)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Step 1 — Verify Docker is running
+docker --version
+docker compose version
+
+# If Docker is not running:
+sudo service docker start
+
+
+# Step 2 — Build all three custom images
+# WHY: postgres, prometheus, grafana are pulled from DockerHub.
+#      MLflow, FastAPI, metrics exporter need to be built from your code.
+
+cd ~/mlops-learnings
+
+# Build MLflow image (uses docker/Dockerfile)
+docker build -f docker/Dockerfile -t prasad890/docker-mlflow:latest .
+
+# Build FastAPI image (uses docker/Dockerfile.api — multi-stage build)
+docker build -f docker/Dockerfile.api -t prasad890/docker-fastapi:latest .
+
+# Build metrics exporter image (uses docker/Dockerfile.metrics)
+docker build -f docker/Dockerfile.metrics -t prasad890/docker-metrics:latest .
+
+# Verify all three images exist
+docker images | grep -E "docker-mlflow|docker-fastapi|docker-metrics"
+
+
+# Step 3 — Fix artifact locations in PostgreSQL
+# WHY: If you trained locally before Docker, experiment artifact_location
+#      in PostgreSQL uses the local path (/app/mlartifacts).
+#      MLflow in Docker serves artifacts via HTTP and needs mlflow-artifacts:/ URI.
+
+cd ~/mlops-learnings/docker
+docker compose up -d db          # start only postgres first
+
+sleep 10
+
+docker compose exec db psql -U mlflow_user -d mlflow_db -c "
+UPDATE experiments
+SET artifact_location = 'mlflow-artifacts:/' || experiment_id
+WHERE artifact_location NOT LIKE 'mlflow-artifacts:%';
+SELECT experiment_id, name, artifact_location FROM experiments ORDER BY experiment_id;
+"
+# Expected output shows all rows with: mlflow-artifacts:/0, mlflow-artifacts:/1 etc.
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DAILY WORKFLOW
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Start the full stack ──────────────────────────────────────────────────────
+
+cd ~/mlops-learnings/docker
+
+# Start all 6 services (db, mlflow, fastapi, metrics, prometheus, grafana)
+docker compose up -d
+
+# Watch startup logs to confirm all services are healthy
+docker compose logs -f
+# Press Ctrl+C to stop following logs (services keep running)
+
+# Check all services are running
+docker compose ps
+# Expected STATUS: Up (healthy) for all services
+
+
+# ── Check service health ──────────────────────────────────────────────────────
+
+# MLflow
+curl -s http://localhost:5000/health
+# Expected: {"status":"OK"}
+
+# FastAPI
+curl -s http://localhost:8000/health | python3 -m json.tool
+# Expected: model_loaded: true
+
+# Metrics exporter
+curl -s http://localhost:8001/metrics | head -20
+
+
+# ── Run training against Docker MLflow ────────────────────────────────────────
+# WHY: The FastAPI container loads the champion model from MLflow.
+#      After training, you need to restart FastAPI to load the new champion.
+
+cd ~/mlops-learnings
+source venv/bin/activate
+
+# Point training scripts at Docker MLflow
+export MLFLOW_TRACKING_URI=http://localhost:5000
+
+# Train
+python src/train.py
+python src/hyperparameter_tuning.py
+python src/model_registry.py
+
+# Restart FastAPI to load the newly registered champion
+cd docker
+docker compose restart fastapi
+
+# Wait for FastAPI to load the model (takes ~20 seconds)
+sleep 20
+docker compose logs fastapi 2>&1 | grep -E "Model loaded|ERROR" | tail -5
+# Expected: INFO - Model loaded: models:/iris_classifier@champion
+
+
+# ── Test predictions ──────────────────────────────────────────────────────────
+
+# Health check
+curl -s http://localhost:8000/health | python3 -m json.tool
+
+# Prediction
+curl -s -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}' \
+  | python3 -m json.tool
+
+# Traffic loop
+python3 -c "
+import requests, time, random
+url = 'http://localhost:8000/predict'
+samples = [
+  {'sepal_length':5.1,'sepal_width':3.5,'petal_length':1.4,'petal_width':0.2},
+  {'sepal_length':6.0,'sepal_width':2.7,'petal_length':5.1,'petal_width':1.6},
+  {'sepal_length':6.9,'sepal_width':3.1,'petal_length':5.4,'petal_width':2.1},
+]
+count = 0
+while True:
+    r = requests.post(url, json=random.choice(samples))
+    count += 1
+    print(r.json()['class_name'], end=' ', flush=True)
+    if count % 20 == 0: print(f'[{count}]')
+    time.sleep(1)
+"
+
+
+# ── Service management ────────────────────────────────────────────────────────
+
+# Stop everything (containers removed, data volumes kept)
+docker compose down
+
+# Stop and DELETE all data (volumes wiped — fresh start)
+docker compose down -v
+
+# Restart a single service
+docker compose restart fastapi
+docker compose restart mlflow
+
+# View logs for a specific service
+docker compose logs fastapi -f
+docker compose logs mlflow -f
+docker compose logs db -f
+
+# Open a shell inside a container
+docker compose exec fastapi bash
+docker compose exec db psql -U mlflow_user -d mlflow_db
+
+# Rebuild a single image after code changes
+docker build -f docker/Dockerfile.api -t prasad890/docker-fastapi:latest .
+docker compose up -d --no-deps fastapi   # restart only fastapi with new image
+
+
+# ── Push images to DockerHub ──────────────────────────────────────────────────
+# Required when deploying to Minikube with imagePullPolicy: IfNotPresent
+
+docker login
+
+docker push prasad890/docker-mlflow:latest
+docker push prasad890/docker-fastapi:latest
+docker push prasad890/docker-metrics:latest
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SERVICE URLS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# MLflow UI       http://localhost:5000
+# FastAPI docs    http://localhost:8000/docs
+# Prometheus      http://localhost:9090
+# Grafana         http://localhost:3000  (admin/admin)

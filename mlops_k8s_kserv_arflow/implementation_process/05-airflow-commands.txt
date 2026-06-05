@@ -1,0 +1,188 @@
+# ── Phase 5: Airflow Daily Commands ──────────────────────────────────────────
+# Commands for managing the Airflow pipeline after initial installation.
+# For installation steps see: mlops_k8s_kserv_arflow/01-install-airflow.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACCESS AIRFLOW UI
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Port-forward the webserver (run in a separate terminal)
+kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow --address 0.0.0.0
+
+# Open in browser:  http://localhost:8080
+# Login:            admin / admin
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DAG MANAGEMENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+# First: open a shell inside the scheduler pod (easier for multiple commands)
+kubectl exec -it airflow-scheduler-0 -n airflow -c scheduler -- bash
+# Now you're inside the Airflow container — run airflow commands directly
+
+# OR run each command individually:
+
+# List all DAGs
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags list
+
+# Check for parse errors (shows if your DAG Python file has syntax errors)
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags list-import-errors
+
+# Show DAG task structure
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow tasks list mlops_training_pipeline --tree
+
+# Pause DAG (stops automatic scheduled runs)
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags pause mlops_training_pipeline
+
+# Unpause DAG (resumes scheduled runs)
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags unpause mlops_training_pipeline
+
+# Trigger a manual run
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags trigger mlops_training_pipeline
+
+# List recent runs (shows state: running/success/failed)
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags list-runs -d mlops_training_pipeline
+
+# Check state of a specific task in a run
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow tasks state mlops_training_pipeline train_model \
+  "manual__2026-06-03T09:37:32+00:00"
+
+# Clear a specific task to re-run it
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow tasks clear mlops_training_pipeline \
+  --task-regex "train_model" --yes
+
+# Clear downstream tasks only
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow tasks clear mlops_training_pipeline \
+  --task-regex "register_champion|deploy_model|verify_deployment" --yes
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UPDATE THE DAG FILE
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Step 1 — edit the DAG on your machine
+# vim ~/mlops-learnings/mlops_k8s_kserv_arflow/mlops_pipeline.py
+
+# Step 2 — copy updated file to scheduler pod
+kubectl cp ~/mlops-learnings/mlops_k8s_kserv_arflow/mlops_pipeline.py \
+  airflow/$(kubectl get pod -n airflow -l component=scheduler \
+  -o jsonpath='{.items[0].metadata.name}'):/opt/airflow/dags/mlops_pipeline.py
+
+# Step 3 — copy to webserver pod (needed for UI display)
+kubectl cp ~/mlops-learnings/mlops_k8s_kserv_arflow/mlops_pipeline.py \
+  airflow/$(kubectl get pod -n airflow -l component=webserver \
+  -o jsonpath='{.items[0].metadata.name}'):/opt/airflow/dags/mlops_pipeline.py
+
+# Step 4 — wait 30 seconds for Airflow to reload the DAG
+sleep 30
+
+# Step 5 — verify no parse errors
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags list-import-errors
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WATCH A PIPELINE RUN
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Terminal 1 — watch training pods appear in mlops namespace
+kubectl get pods -n mlops -w
+# You'll see pods appear and disappear for each task:
+#   airflow-train-model-xxx    Pending → Running → Completed → (deleted)
+#   airflow-tune-model-xxx     Pending → Running → Completed → (deleted)
+#   airflow-register-model-xxx Pending → Running → Completed → (deleted)
+
+# Terminal 2 — follow scheduler logs for task state transitions
+kubectl logs airflow-scheduler-0 -n airflow -c scheduler -f | \
+  grep -E "train_model|tune_model|accuracy|register|deploy|verify|state=|ERROR"
+
+# Terminal 3 — follow a training pod's output when it appears
+# Replace xxx with actual pod name from 'kubectl get pods -n mlops'
+kubectl logs -n mlops airflow-train-model-xxx -c base -f
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CLEAN UP STUCK RUNS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# View all runs and their states
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags list-runs -d mlops_training_pipeline
+
+# Delete all run records from the database (nuclear option — fresh start)
+kubectl exec -it postgres-0 -n mlops -- \
+  psql -U airflow_user -d airflow_db -c "
+DELETE FROM task_instance WHERE dag_id='mlops_training_pipeline';
+DELETE FROM dag_run WHERE dag_id='mlops_training_pipeline';
+SELECT count(*) FROM dag_run WHERE dag_id='mlops_training_pipeline';
+"
+# Expected: count = 0
+
+# Trigger a fresh clean run
+kubectl exec -n airflow airflow-scheduler-0 -c scheduler -- \
+  airflow dags trigger mlops_training_pipeline
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHANGE THE SCHEDULE
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Edit the schedule in mlops_pipeline.py:
+#
+# Every Monday at 2am:       schedule="0 2 * * 1"    (current)
+# Every day at midnight:     schedule="0 0 * * *"
+# Every 6 hours:             schedule="0 */6 * * *"
+# Every hour:                schedule="0 * * * *"
+# Manual only (never runs):  schedule=None
+#
+# After editing, copy the updated file (see UPDATE THE DAG FILE section above)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEBUG COMMANDS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# All Airflow pods
+kubectl get pods -n airflow
+
+# Scheduler logs (task dispatch, DAG parsing)
+kubectl logs -n airflow -l component=scheduler --tail=50 -f
+
+# Webserver logs (UI errors)
+kubectl logs -n airflow -l component=webserver --tail=30
+
+# Helm release status
+helm status airflow -n airflow
+
+# Helm release history
+helm history airflow -n airflow
+
+# Upgrade Airflow after values change
+helm upgrade airflow apache-airflow/airflow \
+  --namespace airflow \
+  --version 1.11.0 \
+  --values ~/mlops-learnings/mlops_k8s_kserv_arflow/airflow-values.yaml \
+  --set "webserver.defaultUser.enabled=true" \
+  --set "webserver.defaultUser.role=Admin" \
+  --set "webserver.defaultUser.username=admin" \
+  --set "webserver.defaultUser.password=admin" \
+  --set "webserver.defaultUser.email=admin@example.com" \
+  --set "webserver.defaultUser.firstName=Admin" \
+  --set "webserver.defaultUser.lastName=User"
+
+# Uninstall Airflow completely
+helm uninstall airflow -n airflow
+kubectl delete namespace airflow

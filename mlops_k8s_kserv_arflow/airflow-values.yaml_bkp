@@ -1,28 +1,6 @@
-# ── Airflow Helm Values — Minikube optimised ─────────────────────────────────
-# Applied via: helm install/upgrade ... --values airflow-values.yaml
-#
-# KEY DECISIONS:
-#   executor: LocalExecutor
-#     Tasks run inside the scheduler pod — no Redis/Celery needed.
-#     Change to KubernetesExecutor in production.
-#
-#   postgresql.enabled: false
-#     Uses existing postgres-0 pod in mlops namespace (airflow_db database).
-#     Avoids pulling bitnami/postgresql which has no stable tag.
-#     Connection string in airflow-db-secret Secret.
-#
-#   statsd.enabled: false
-#     statsd-exporter image pull times out on WSL2/Minikube.
-#     Not needed for development.
-#
-#   webserver.workers: 1 (via config.webserver.workers)
-#     Default 4 gunicorn workers starve on Minikube.
-#     1 worker is sufficient for development.
-# ─────────────────────────────────────────────────────────────────────────────
-
 executor: "LocalExecutor"
 
-# ── Environment variables injected into all Airflow components ───────────────
+# ── Environment variables ─────────────────────────────────────────────────────
 env:
   - name: MLFLOW_TRACKING_URI
     value: "http://mlflow.mlops.svc.cluster.local:5000"
@@ -43,7 +21,7 @@ webserver:
       cpu: "200m"
       memory: "512Mi"
     limits:
-      cpu: "1000m"
+      cpu: "1000m"              # increased from 500m — workers need headroom
       memory: "1Gi"
   service:
     type: NodePort
@@ -53,7 +31,7 @@ webserver:
         targetPort: airflow-ui
         nodePort: 30808
   startupProbe:
-    failureThreshold: 30      # 30 x 10s = 5 minutes to start
+    failureThreshold: 30        # 30 x 10s = 5 minutes to fully start
     periodSeconds: 10
   livenessProbe:
     initialDelaySeconds: 120
@@ -69,26 +47,17 @@ scheduler:
   replicas: 1
   resources:
     requests:
-      cpu: "200m"
-      memory: "512Mi"
+      cpu: "100m"
+      memory: "256Mi"
     limits:
-      cpu: "1000m"
-      memory: "1Gi"
-  startupProbe:
-    timeoutSeconds: 60        # airflow jobs check needs more than 20s default
-    failureThreshold: 30
-    periodSeconds: 10
-  livenessProbe:
-    timeoutSeconds: 60
-    initialDelaySeconds: 120
-    periodSeconds: 30
-    failureThreshold: 5
+      cpu: "300m"
+      memory: "512Mi"
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
-# Disabled — using existing postgres-0 pod in mlops namespace.
-# Setup: kubectl exec postgres-0 -n mlops -- psql -U mlflow_user -d mlflow_db
-#          -c "CREATE USER airflow_user WITH PASSWORD 'airflow_password_2026';"
-#          -c "CREATE DATABASE airflow_db OWNER airflow_user;"
+# Disabled — using existing postgres pod in mlops namespace instead.
+# Airflow metadata (DAG runs, task states) stored in airflow_db database
+# on the same postgres-0 pod that holds mlflow_db.
+# Connection string is in the airflow-db-secret Secret.
 postgresql:
   enabled: false
 
@@ -98,13 +67,14 @@ data:
   resultBackendSecretName: airflow-db-secret
 
 # ── statsd ────────────────────────────────────────────────────────────────────
+# Disabled — image pull times out on WSL2/Minikube
 statsd:
   enabled: false
 
 # ── DAGs ──────────────────────────────────────────────────────────────────────
 dags:
   gitSync:
-    enabled: false      # copy DAGs manually via kubectl cp
+    enabled: false
   persistence:
     enabled: true
     size: 1Gi
@@ -125,19 +95,39 @@ connections:
     port: 5000
     description: "MLflow tracking server"
 
-# ── Config overrides ──────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 config:
   webserver:
     expose_config: "True"
-    workers: "1"                  # 1 gunicorn worker — Minikube can't feed 4
+    workers: "1"                # gunicorn --workers 1
     worker_refresh_interval: "30"
   core:
     load_examples: "False"
     dag_file_processor_timeout: "120"
 
-# ── Airflow image ─────────────────────────────────────────────────────────────
+# ── Image ─────────────────────────────────────────────────────────────────────
 images:
   airflow:
     repository: apache/airflow
     tag: "2.8.1"
     pullPolicy: IfNotPresent
+
+
+scheduler:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"        # increase from 300m
+      memory: "1Gi"
+  startupProbe:
+    timeoutSeconds: 60    # key fix — give the check command 60s instead of 20s
+    failureThreshold: 30  # 30 x 10s = 5 minutes total startup window
+    periodSeconds: 10
+  livenessProbe:
+    timeoutSeconds: 60
+    initialDelaySeconds: 120
+    periodSeconds: 30
+    failureThreshold: 5

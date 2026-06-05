@@ -1,0 +1,52 @@
+# ── Istio PeerAuthentication — PERMISSIVE mTLS ────────────────────────────────
+# WHY this file exists:
+#   The mlops namespace has Istio injection enabled for KServe routing.
+#   Training pods (KubernetesPodOperator) run WITHOUT Istio sidecars
+#   (annotation: sidecar.istio.io/inject: "false").
+#   When a non-sidecar pod tries to reach a sidecar-enabled pod (MLflow),
+#   the receiving sidecar returns 503 if mTLS is STRICT.
+#
+#   PERMISSIVE mode accepts BOTH mTLS (from sidecar pods) and plain HTTP
+#   (from non-sidecar training pods). This is correct for development.
+#
+# Apply:
+#   kubectl apply -f mlops_k8s_kserv_arflow/peer-authentication.yaml
+#
+# Verify:
+#   kubectl get peerauthentication -A
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system   # mesh-wide — applies to all namespaces
+spec:
+  mtls:
+    mode: PERMISSIVE         # accept both mTLS and plain HTTP
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: mlflow-permissive
+  namespace: mlops
+spec:
+  selector:
+    matchLabels:
+      app: mlflow
+  mtls:
+    mode: PERMISSIVE         # MLflow specifically accepts plain HTTP from training pods
+---
+# ── DestinationRule — disable mTLS for MLflow ────────────────────────────────
+# Tells Istio client sidecars not to upgrade connections to MLflow to mTLS.
+# Without this, sidecar-enabled pods (FastAPI) would try mTLS to MLflow
+# even though MLflow has no sidecar to terminate mTLS.
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: mlflow-disable-mtls
+  namespace: mlops
+spec:
+  host: mlflow.mlops.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE

@@ -1,0 +1,205 @@
+# ── Phase 3: Minikube Kubernetes ─────────────────────────────────────────────
+# Deploys all 6 services as Kubernetes manifests.
+# WHY Kubernetes: production-grade orchestration, auto-healing,
+# resource limits, namespaces, and prepares for KServe/Airflow.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIRST TIME SETUP
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Step 1 — Start Minikube with enough resources
+minikube start --cpus=6 --memory=12288 --disk-size=40g --driver=docker
+
+# Enable metrics-server (required for HPA — FastAPI autoscaling)
+minikube addons enable metrics-server
+
+# Verify cluster is up
+minikube status
+kubectl get nodes
+# Expected: minikube   Ready
+
+
+# Step 2 — Build images inside Minikube
+# WHY: Minikube has its own Docker daemon. Images built on your host
+#      are invisible to Minikube. This command points your Docker CLI
+#      at Minikube's internal Docker daemon.
+
+eval $(minikube docker-env)
+
+# Confirm you are inside Minikube's Docker
+docker info | grep Name
+# Expected: Name: minikube
+
+cd ~/mlops-learnings
+docker build -f docker/Dockerfile        -t docker-mlflow:latest   .
+docker build -f docker/Dockerfile.api    -t docker-fastapi:latest  .
+docker build -f docker/Dockerfile.metrics -t docker-metrics:latest .
+
+# Verify images are present inside Minikube
+docker images | grep docker-
+# Expected: docker-fastapi, docker-mlflow, docker-metrics all listed
+
+
+# Step 3 — Deploy the entire stack
+cd ~/mlops-learnings
+
+kubectl apply -k mlops_k8s_minikube/
+
+# Watch pods start (takes 3-5 minutes)
+kubectl get pods -n mlops -w
+# Wait for all pods to show 1/1 Running
+
+# Also watch monitoring namespace
+kubectl get pods -n monitoring -w
+
+
+# Step 4 — Fix artifact locations
+kubectl exec -it postgres-0 -n mlops -- \
+  psql -U mlflow_user -d mlflow_db -c "
+UPDATE experiments
+SET artifact_location = 'mlflow-artifacts:/' || experiment_id
+WHERE artifact_location NOT LIKE 'mlflow-artifacts:%';
+SELECT experiment_id, name, artifact_location FROM experiments ORDER BY experiment_id;
+"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DAILY WORKFLOW
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Access services via port-forward ─────────────────────────────────────────
+# WHY port-forward: Minikube with Docker driver on WSL2 doesn't expose
+#      NodePorts directly to Windows. Port-forward tunnels a port from
+#      your WSL terminal to a service inside the cluster.
+# Open a separate terminal for each service you need.
+
+# Terminal 1 — MLflow
+kubectl port-forward svc/mlflow -n mlops 5000:5000 --address 0.0.0.0
+
+# Terminal 2 — FastAPI
+kubectl port-forward svc/fastapi -n mlops 8000:8000 --address 0.0.0.0
+
+# Terminal 3 — Prometheus
+kubectl port-forward svc/prometheus -n monitoring 9090:9090 --address 0.0.0.0
+
+# Terminal 4 — Grafana
+kubectl port-forward svc/grafana -n monitoring 3000:3000 --address 0.0.0.0
+
+
+# ── Run training against K8s MLflow ──────────────────────────────────────────
+# In your main terminal (port-forward must be running in another terminal)
+
+cd ~/mlops-learnings
+source venv/bin/activate
+
+# Reset Docker env to host (undo minikube docker-env)
+eval $(minikube docker-env --unset)
+
+export MLFLOW_TRACKING_URI=http://localhost:5000
+
+python src/train.py
+python src/model_registry.py
+
+# Restart FastAPI deployment to load the new champion
+kubectl rollout restart deployment/fastapi -n mlops
+kubectl rollout status deployment/fastapi -n mlops --timeout=120s
+
+# Verify model loaded
+kubectl logs -n mlops -l app=fastapi --tail=10 | grep -E "Model loaded|ERROR"
+
+
+# ── Test predictions ──────────────────────────────────────────────────────────
+
+# Health check
+curl -s http://localhost:8000/health | python3 -m json.tool
+
+# Prediction
+curl -s -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}' \
+  | python3 -m json.tool
+
+
+# ── Pod management ────────────────────────────────────────────────────────────
+
+# Check all pods
+kubectl get pods -n mlops
+kubectl get pods -n monitoring
+
+# Check pod logs
+kubectl logs -n mlops deployment/mlflow
+kubectl logs -n mlops deployment/fastapi
+kubectl logs -n mlops deployment/metrics
+kubectl logs -n monitoring deployment/prometheus
+kubectl logs -n monitoring deployment/grafana
+
+# Follow logs live
+kubectl logs -n mlops deployment/fastapi -f
+
+# Describe a pod (see events, resource usage, probe status)
+kubectl describe pod <pod-name> -n mlops
+
+# Open a shell inside a pod
+kubectl exec -it deployment/fastapi -n mlops -- bash
+kubectl exec -it postgres-0 -n mlops -- psql -U mlflow_user -d mlflow_db
+
+# Check PersistentVolumeClaims (storage)
+kubectl get pvc -n mlops
+kubectl get pvc -n monitoring
+
+
+# ── Redeploy a single service ─────────────────────────────────────────────────
+
+# Option 1: restart existing deployment (uses same image)
+kubectl rollout restart deployment/fastapi -n mlops
+
+# Option 2: delete and recreate (use after changing YAML)
+kubectl delete deployment fastapi -n mlops
+kubectl apply -f mlops_k8s_minikube/05-fastapi.yaml
+
+# Option 3: rebuild image and restart (use after changing code)
+eval $(minikube docker-env)
+docker build -f docker/Dockerfile.api -t docker-fastapi:latest .
+kubectl rollout restart deployment/fastapi -n mlops
+
+
+# ── Scale services manually ───────────────────────────────────────────────────
+
+# Scale FastAPI to 3 replicas
+kubectl scale deployment fastapi -n mlops --replicas=3
+
+# Check HPA status (auto-scaler)
+kubectl get hpa -n mlops
+
+
+# ── Full teardown and redeploy ────────────────────────────────────────────────
+
+# Delete everything (PVCs kept — data survives)
+kubectl delete -k mlops_k8s_minikube/
+
+# Delete including storage (WARNING: all data lost)
+kubectl delete -k mlops_k8s_minikube/
+kubectl delete pvc --all -n mlops
+kubectl delete pvc --all -n monitoring
+
+# Redeploy fresh
+kubectl apply -k mlops_k8s_minikube/
+
+
+# ── Stop Minikube ─────────────────────────────────────────────────────────────
+minikube stop
+
+# Restart Minikube (keeps all data)
+minikube start
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SERVICE URLS (via port-forward)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# MLflow UI       http://localhost:5000
+# FastAPI docs    http://localhost:8000/docs
+# Prometheus      http://localhost:9090
+# Grafana         http://localhost:3000  (admin/admin)

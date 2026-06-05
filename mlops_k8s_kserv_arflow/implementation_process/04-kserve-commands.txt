@@ -1,0 +1,180 @@
+# ── Phase 4: KServe Daily Commands ───────────────────────────────────────────
+# Commands for managing KServe InferenceService after initial installation.
+# For installation steps see: 00-restart-minikube.txt through 05-replace-fastapi.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ISTIO PATH — restore after new terminal or reboot
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Add istioctl to PATH (run this every new terminal session)
+export PATH=$HOME/mlops-learnings/istio-1.20.3/bin:$PATH
+
+# Verify
+istioctl version
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHECK KSERVE STATUS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Check InferenceService is Ready
+kubectl get inferenceservice iris-classifier -n mlops
+# Expected:
+#   NAME               URL                                                 READY
+#   iris-classifier    http://iris-classifier.mlops.192.168.58.2.sslip.io True
+
+# Get the full endpoint URL
+kubectl get inferenceservice iris-classifier -n mlops \
+  -o jsonpath='{.status.url}'
+
+# Check Knative revisions (model versions)
+kubectl get revision -n mlops
+
+# Check current traffic split
+kubectl get inferenceservice iris-classifier -n mlops -o yaml | grep -A 10 traffic
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TEST PREDICTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Replace 192.168.58.2 with your actual minikube ip output
+MINIKUBE_IP=$(minikube ip)
+
+# Health check via Istio ingress
+curl -s http://iris-classifier.mlops.${MINIKUBE_IP}.sslip.io:32080/health \
+  | python3 -m json.tool
+
+# Single prediction
+curl -s -X POST \
+  http://iris-classifier.mlops.${MINIKUBE_IP}.sslip.io:32080/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}' \
+  | python3 -m json.tool
+
+# Traffic loop
+python3 -c "
+import requests, time, random
+MINIKUBE_IP = '$(minikube ip)'
+url = f'http://iris-classifier.mlops.{MINIKUBE_IP}.sslip.io:32080/predict'
+samples = [
+  {'sepal_length':5.1,'sepal_width':3.5,'petal_length':1.4,'petal_width':0.2},
+  {'sepal_length':6.0,'sepal_width':2.7,'petal_length':5.1,'petal_width':1.6},
+  {'sepal_length':6.9,'sepal_width':3.1,'petal_length':5.4,'petal_width':2.1},
+]
+count = 0
+while True:
+    r = requests.post(url, json=random.choice(samples))
+    count += 1
+    print(r.json()['class_name'], end=' ', flush=True)
+    if count % 20 == 0: print(f'[{count}]')
+    time.sleep(1)
+"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCALE TO ZERO — test and observe
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Stop sending traffic. After ~90 seconds Knative scales pod to 0.
+kubectl get pods -n mlops -w
+# Watch the iris-classifier-predictor pod disappear
+
+# Send request after scale-to-zero — cold start (~15 seconds)
+time curl -s -X POST \
+  http://iris-classifier.mlops.$(minikube ip).sslip.io:32080/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
+# The 'time' prefix shows how long the request took (includes cold start)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RETRAIN AND DEPLOY NEW MODEL VERSION
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Step 1 — port-forward MLflow
+kubectl port-forward svc/mlflow -n mlops 5000:5000 &
+
+# Step 2 — retrain
+cd ~/mlops-learnings
+source venv/bin/activate
+export MLFLOW_TRACKING_URI=http://localhost:5000
+
+python src/train.py
+python src/model_registry.py
+
+# Step 3 — patch InferenceService annotation to trigger new Knative revision
+# WHY: KServe doesn't automatically reload the model when the champion alias
+#      changes in MLflow. Patching an annotation forces a new Revision.
+kubectl patch inferenceservice iris-classifier -n mlops \
+  --type='merge' \
+  -p "{\"metadata\":{\"annotations\":{\"mlops/reloaded\":\"$(date +%s)\"}}}"
+
+# Watch the new revision come up
+kubectl get pods -n mlops -w
+# New pod appears, old pod terminates
+
+# Verify new model is serving
+kubectl logs -n mlops \
+  $(kubectl get pod -n mlops -l serving.kserve.io/inferenceservice=iris-classifier \
+  -o jsonpath='{.items[0].metadata.name}') \
+  -c kserve-container | grep -E "Model loaded|champion"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CANARY DEPLOYMENT — test new model on 20% of traffic
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Step 1 — edit 05-inference-service.yaml
+# Uncomment this line in the spec.predictor section:
+#   canaryTrafficPercent: 20
+
+# Step 2 — apply the updated InferenceService
+kubectl apply -f mlops_k8s_kserv_arflow/05-inference-service.yaml
+
+# Step 3 — check that two revisions exist with traffic split
+kubectl get revision -n mlops
+# Shows two revisions
+
+kubectl get inferenceservice iris-classifier -n mlops -o yaml | grep -A 10 traffic
+# Shows: 80% to old revision, 20% to new revision
+
+# Step 4a — promote (make new version 100%)
+# Remove canaryTrafficPercent from 05-inference-service.yaml, then:
+kubectl apply -f mlops_k8s_kserv_arflow/05-inference-service.yaml
+
+# Step 4b — rollback (bring old version back to 100%)
+kubectl rollout undo -n mlops ksvc/iris-classifier-predictor
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEBUG COMMANDS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# InferenceService full status (conditions and events)
+kubectl describe inferenceservice iris-classifier -n mlops
+
+# Knative service
+kubectl get ksvc -n mlops
+
+# Istio virtual service (traffic routing rules)
+kubectl get virtualservice -n mlops
+
+# Istio ingress gateway logs
+kubectl logs -n istio-system -l app=istio-ingressgateway --tail=30
+
+# KServe controller logs
+kubectl logs -n kserve -l control-plane=kserve-controller-manager --tail=30
+
+# Model pod logs (if running)
+kubectl logs -n mlops \
+  -l serving.kserve.io/inferenceservice=iris-classifier \
+  -c kserve-container --tail=30
+
+# Check all Istio PeerAuthentication policies
+kubectl get peerauthentication -A
+
+# Check DestinationRules
+kubectl get destinationrule -n mlops

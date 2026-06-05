@@ -1,0 +1,178 @@
+# ── Quick Reference ───────────────────────────────────────────────────────────
+# Most commonly used commands across all phases.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SERVICE URLS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# LOCAL (Phase 1)
+#   MLflow UI       http://localhost:5000
+#   FastAPI docs    http://localhost:8000/docs
+#   Prometheus      http://localhost:9090
+#   Grafana         http://localhost:3000
+
+# DOCKER COMPOSE (Phase 2)    — same ports as local
+
+# MINIKUBE (Phase 3)
+#   MLflow          http://localhost:5000  (with port-forward)
+#   FastAPI         http://localhost:8000  (with port-forward)
+#   Prometheus      http://localhost:9090  (with port-forward)
+#   Grafana         http://localhost:3000  (with port-forward)
+
+# KSERVE (Phase 4)
+#   Model endpoint  http://iris-classifier.mlops.$(minikube ip).sslip.io:32080/predict
+
+# AIRFLOW (Phase 5)
+#   Airflow UI      http://localhost:8080  (with port-forward)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PORT FORWARD (run one per service, each in its own terminal)
+# ══════════════════════════════════════════════════════════════════════════════
+
+kubectl port-forward svc/mlflow       -n mlops      5000:5000 --address 0.0.0.0
+kubectl port-forward svc/fastapi      -n mlops      8000:8000 --address 0.0.0.0
+kubectl port-forward svc/prometheus   -n monitoring 9090:9090 --address 0.0.0.0
+kubectl port-forward svc/grafana      -n monitoring 3000:3000 --address 0.0.0.0
+kubectl port-forward svc/airflow-webserver -n airflow 8080:8080 --address 0.0.0.0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HEALTH CHECKS
+# ══════════════════════════════════════════════════════════════════════════════
+
+curl -s http://localhost:5000/health                           # MLflow
+curl -s http://localhost:8000/health | python3 -m json.tool   # FastAPI
+curl -s http://localhost:9090/-/ready                         # Prometheus
+curl -s http://localhost:3000/api/health                      # Grafana
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TRAINING PIPELINE
+# ══════════════════════════════════════════════════════════════════════════════
+
+cd ~/mlops-learnings
+source venv/bin/activate
+export MLFLOW_TRACKING_URI=http://localhost:5000
+
+python src/train.py                   # baseline training
+python src/hyperparameter_tuning.py   # 50-trial Optuna search
+python src/model_registry.py          # register best as champion
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PREDICTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Local / Docker / Minikube port-forward
+curl -s -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}' \
+  | python3 -m json.tool
+
+# KServe (replace IP with your minikube ip)
+curl -s -X POST \
+  http://iris-classifier.mlops.192.168.58.2.sslip.io:32080/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}' \
+  | python3 -m json.tool
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# KUBERNETES STATUS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# All namespaces at once
+kubectl get pods -n mlops
+kubectl get pods -n monitoring
+kubectl get pods -n airflow
+kubectl get pods -n kserve
+kubectl get pods -n knative-serving
+kubectl get pods -n istio-system
+kubectl get pods -n cert-manager
+
+# Check InferenceService
+kubectl get inferenceservice -n mlops
+
+# Check HPA (autoscaler)
+kubectl get hpa -n mlops
+
+# Check PVCs (persistent storage)
+kubectl get pvc -n mlops
+kubectl get pvc -n monitoring
+
+# Node resource usage
+kubectl top nodes
+kubectl top pods -n mlops
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DOCKER IMAGES
+# ══════════════════════════════════════════════════════════════════════════════
+
+# DockerHub images (used in K8s)
+#   prasad890/docker-mlflow:latest
+#   prasad890/docker-fastapi:latest
+#   prasad890/docker-metrics:latest
+
+# Build and push
+docker build -f docker/Dockerfile        -t prasad890/docker-mlflow:latest   .
+docker build -f docker/Dockerfile.api    -t prasad890/docker-fastapi:latest  .
+docker build -f docker/Dockerfile.metrics -t prasad890/docker-metrics:latest .
+docker push prasad890/docker-mlflow:latest
+docker push prasad890/docker-fastapi:latest
+docker push prasad890/docker-metrics:latest
+
+# Build for Minikube (inside minikube docker daemon)
+eval $(minikube docker-env)
+docker build -f docker/Dockerfile        -t docker-mlflow:latest   .
+docker build -f docker/Dockerfile.api    -t docker-fastapi:latest  .
+docker build -f docker/Dockerfile.metrics -t docker-metrics:latest .
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIX ARTIFACT LOCATIONS (run when models can't upload artifacts)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Docker Compose
+cd ~/mlops-learnings/docker
+docker compose exec db psql -U mlflow_user -d mlflow_db -c "
+UPDATE experiments
+SET artifact_location = 'mlflow-artifacts:/' || experiment_id
+WHERE artifact_location NOT LIKE 'mlflow-artifacts:%';"
+
+# Kubernetes
+kubectl exec -it postgres-0 -n mlops -- \
+  psql -U mlflow_user -d mlflow_db -c "
+UPDATE experiments
+SET artifact_location = 'mlflow-artifacts:/' || experiment_id
+WHERE artifact_location NOT LIKE 'mlflow-artifacts:%';"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MLFLOW DATABASE QUERIES
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Connect to MLflow database
+kubectl exec -it postgres-0 -n mlops -- psql -U mlflow_user -d mlflow_db
+
+# Inside psql:
+# \dt                                          list tables
+# SELECT * FROM experiments;                   list experiments
+# SELECT * FROM registered_models;             list registered models
+# SELECT * FROM registered_model_aliases;      list model aliases
+# \q                                           quit
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MINIKUBE
+# ══════════════════════════════════════════════════════════════════════════════
+
+minikube start --cpus=6 --memory=16384 --disk-size=40g --driver=docker
+minikube stop
+minikube status
+minikube ip                           # get minikube IP (e.g. 192.168.58.2)
+eval $(minikube docker-env)           # point docker at minikube daemon
+eval $(minikube docker-env --unset)   # point docker back at host daemon
